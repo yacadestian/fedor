@@ -6,7 +6,7 @@ Personal health analytics system via Telegram. Upload lab results (PDF, photo, t
 
 > **This fork adds** (on top of [petrovich-health](https://github.com/petrovich-opendev/petrovich-health)):
 > - **LLM provider abstraction** (`llm.py`) — DeepSeek API (V4) or Claude CLI behind one interface with fast/smart tiers; DeepSeek V4 thinking mode is disabled for deterministic tasks (extraction, OCR cleanup) and enabled for Q&A
-> - **Robust OCR for low-quality photos** — OpenCV preprocessing (upscale, denoise, CLAHE, unsharp mask, deskew, adaptive binarization), quality assessment, multi-pass with per-candidate scoring (`image_ocr.py`). Backend is picked automatically: Claude Vision when the Claude CLI is available, **local Tesseract + LLM post-correction** on DeepSeek (its API is text-only)
+> - **Robust OCR for low-quality photos** — OpenCV preprocessing (upscale, denoise, CLAHE, unsharp mask, deskew, adaptive binarization), quality assessment, multi-pass with per-candidate scoring (`ocr.py`). Backend is picked automatically: **vision API** (Gemini / OpenRouter / OpenAI / DashScope — OpenAI-compatible) when a key is set, Claude Vision when the Claude CLI is available. Measured on a degraded lab-report photo: Gemini flash-lite reads 8/8 biomarkers with correct values in ~4s, one call
 > - **Health diary** — timestamped wellbeing/symptom/note entries with structured scores, and **personal hypotheses** with lifecycle (active → confirmed/rejected); diary flows into the LLM context (`diary.py`)
 > - **Voice messages** — local faster-whisper transcription feeds the same diary/Q&A routing; audio never leaves your server (`voice.py`)
 > - **Yandex Disk sync** — every received document + its `.txt` mirror is backed up to Yandex Disk via WebDAV (`yadisk.py`)
@@ -80,9 +80,12 @@ ClickHouse (11 tables)
 - Python 3.11+
 - ClickHouse (local or remote)
 - **LLM — one of:**
-  - **DeepSeek API key** (`DEEPSEEK_API_KEY` in `.env`) — V4-Flash for extraction/cleanup, V4-Pro for Q&A. Note: DeepSeek API is text-only, so photo OCR goes through local Tesseract + LLM cleanup
-  - **Claude CLI** (`claude` command) with active subscription (MAX or API) — enables vision OCR for photos
-- **Tesseract with Russian data** (required for photo OCR on DeepSeek, optional cross-check otherwise): `apt install tesseract-ocr tesseract-ocr-rus`
+  - **DeepSeek API key** (`DEEPSEEK_API_KEY` in `.env`) — V4-Flash for extraction/cleanup, V4-Pro for Q&A
+  - **Claude CLI** (`claude` command) with active subscription (MAX or API)
+- **Vision OCR for photos — one of:**
+  - **Gemini API key** (`OCR_VISION_API_KEY`) — free tier at [aistudio.google.com](https://aistudio.google.com), `gemini-2.5-flash-lite` reads even low-quality photos in seconds
+  - **OpenRouter / OpenAI / DashScope key** — any OpenAI-compatible vision endpoint via `OCR_VISION_API_BASE`
+  - **Claude CLI** — used automatically if no API key is set
 - Telegram Bot (create via @BotFather)
 
 ## Quick Start
@@ -158,13 +161,16 @@ clickhouse-client -q "GRANT ALL ON health_analytics.* TO health_bot"
 | `DEEPSEEK_MODEL_FAST` | `deepseek-v4-flash` | Extraction, classification, OCR cleanup |
 | `DEEPSEEK_MODEL_SMART` | `deepseek-v4-pro` | Q&A, health profile, digests |
 | `DEEPSEEK_THINKING` | `fast=disabled,smart=enabled` | V4 thinking mode per tier. Reasoning tokens share the completion budget — deterministic tasks run non-thinking |
-| `OCR_BACKEND` | `auto` | `vision` (Claude) or `tesseract` (local); auto = vision when Claude CLI present |
+| `OCR_VISION_API_BASE` | Gemini OpenAI-compat | Any OpenAI-compatible vision endpoint (Gemini / OpenRouter / OpenAI / DashScope) |
+| `OCR_VISION_API_KEY` | — | Key for the vision provider |
+| `OCR_VISION_API_MODEL_FAST` | `gemini-2.5-flash-lite` | First attempt on the original photo (cheap) |
+| `OCR_VISION_API_MODEL` | `gemini-2.5-flash` | Retries on preprocessed variants (quality) |
+| `OCR_BACKEND` | `auto` | `vision_api` / `vision` (Claude) / `tesseract` (legacy, opt-in) |
 | `OCR_CLEANUP` | `1` | LLM post-correction of OCR text (fixes typical OCR letter/digit confusions) |
-| `OCR_VISION_MODEL` | `claude-sonnet-4-6` | Model for vision attempts |
-| `OCR_FINAL_MODEL` | = `OCR_VISION_MODEL` | Stronger model for the last attempt (e.g. `claude-opus-4-6`) |
-| `OCR_MAX_ATTEMPTS` | `3` | Max vision attempts across image variants |
+| `OCR_VISION_MODEL` | `claude-sonnet-4-6` | Model for Claude CLI vision attempts |
+| `OCR_MAX_ATTEMPTS` | `3` | Max attempts across image variants |
 | `OCR_TIMEOUT` | `180` | Per-attempt timeout, seconds |
-| `OCR_TESSERACT` | `auto` | `1`/`0` force Tesseract cross-check; auto = on if `rus` language data installed |
+| `OCR_TESSERACT` | off | `1` forces legacy Tesseract backend (not recommended) |
 
 ## Knowledge Bases
 

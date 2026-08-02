@@ -6,14 +6,22 @@ multi-pass Claude Vision with per-candidate quality scoring → optional
 Tesseract cross-check. The best-scoring transcription wins.
 
 Env knobs:
-    OCR_BACKEND        auto|vision|tesseract (default auto: vision when the
-                       Claude CLI is the LLM provider, tesseract otherwise —
-                       DeepSeek API is text-only, so photos go through Tesseract)
-    OCR_VISION_MODEL   vision model for attempts (default claude-sonnet-4-6)
+    OCR_BACKEND        auto|vision_api|vision|tesseract (default auto). Auto order:
+                       vision_api — OpenAI-compatible vision API key set
+                       (OpenRouter / Gemini / OpenAI / DashScope — works with
+                       text-only LLM providers like DeepSeek);
+                       vision — Claude CLI available;
+                       tesseract — only when explicitly forced below.
+    OCR_VISION_API_BASE   e.g. https://openrouter.ai/api/v1 or
+                          https://generativelanguage.googleapis.com/v1beta/openai
+    OCR_VISION_API_KEY    API key for the vision provider
+    OCR_VISION_API_MODEL  e.g. qwen/qwen3-vl-8b-instruct (OpenRouter) or
+                          gemini-2.5-flash (Google OpenAI-compatible endpoint)
+    OCR_VISION_MODEL   vision model for Claude CLI attempts (default claude-sonnet-4-6)
     OCR_FINAL_MODEL    stronger model for the last attempt (default = OCR_VISION_MODEL)
-    OCR_MAX_ATTEMPTS   max vision attempts across variants (default 3)
+    OCR_MAX_ATTEMPTS   max attempts across variants (default 3)
     OCR_TIMEOUT        per-attempt timeout seconds (default 180)
-    OCR_TESSERACT      1/0 force tesseract cross-check, default auto (on if rus data present)
+    OCR_TESSERACT      1 forces legacy tesseract backend/cross-check (default off)
     OCR_CLEANUP        1/0 LLM post-correction of OCR text (default 1)
 """
 from __future__ import annotations
@@ -30,6 +38,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import requests
 
 log = logging.getLogger("health-bot")
 
@@ -95,18 +104,72 @@ _CLEANUP_PROMPT = """Ниже — результат OCR медицинског�
 """
 
 
+VISION_API_BASE = os.getenv(
+    "OCR_VISION_API_BASE",
+    "https://generativelanguage.googleapis.com/v1beta/openai").rstrip("/")
+VISION_API_KEY = os.getenv("OCR_VISION_API_KEY", "").strip()
+VISION_API_MODEL = os.getenv("OCR_VISION_API_MODEL", "gemini-2.5-flash")
+VISION_API_MODEL_FAST = os.getenv("OCR_VISION_API_MODEL_FAST", "gemini-2.5-flash-lite")
+
+
+def _vision_api_available() -> bool:
+    return bool(VISION_API_KEY)
+
+
+def _image_data_url(image_path: Path) -> str:
+    suffix = image_path.suffix.lower().lstrip(".")
+    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "png": "image/png", "webp": "image/webp"}.get(suffix, "image/jpeg")
+    import base64 as _b64
+    return f"data:{mime};base64," + _b64.b64encode(image_path.read_bytes()).decode()
+
+
+def _vision_api_read(image_path: Path, model: str | None = None) -> str:
+    """OpenAI-compatible vision API (Gemini / OpenRouter / OpenAI / DashScope).
+    One request, image inline as data URL."""
+    resp = requests.post(
+        f"{VISION_API_BASE}/chat/completions",
+        headers={"Authorization": f"Bearer {VISION_API_KEY}"},
+        json={
+            "model": model or VISION_API_MODEL,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": _OCR_PROMPT},
+                {"type": "image_url",
+                 "image_url": {"url": _image_data_url(image_path)}},
+            ]}],
+            "temperature": 0.0,
+            "max_tokens": 8192,
+        },
+        timeout=OCR_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"vision API HTTP {resp.status_code}: {resp.text[:200]}")
+    text = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+    if not text:
+        raise RuntimeError("vision API вернул пустой ответ")
+    return text
+
+
 def ocr_backend() -> str:
-    """Which OCR engine to use: vision LLM or local Tesseract."""
+    """Which OCR engine to use. Auto: vision API key → Claude vision → guidance error.
+    Tesseract only when explicitly forced (OCR_BACKEND=tesseract / OCR_TESSERACT=1)."""
     forced = os.getenv("OCR_BACKEND", "auto").strip().lower()
-    if forced in ("vision", "tesseract"):
+    if forced in ("vision_api", "vision", "tesseract"):
         return forced
+    if _vision_api_available():
+        return "vision_api"
     try:
         from . import llm
         if llm.provider() == "claude" and shutil.which("claude"):
             return "vision"
     except Exception:
         pass
-    return "tesseract" if _tesseract_available() else "vision"
+    if _tesseract_forced():
+        return "tesseract"
+    raise RuntimeError(
+        "Нет доступного OCR-движка. Варианты:\n"
+        "1) OCR_VISION_API_KEY в .env — Gemini (есть бесплатный тир) или OpenRouter;\n"
+        "2) Claude CLI — тогда фото читает Claude Vision.")
 
 
 @dataclass
@@ -346,9 +409,13 @@ def _vision_read(image_path: Path, model: str) -> str:
     return _vision_read_inline(image_path, model)
 
 
+def _tesseract_forced() -> bool:
+    return os.getenv("OCR_TESSERACT", "").strip().lower() in ("1", "yes", "true", "on")
+
+
 def _tesseract_available() -> bool:
-    flag = os.getenv("OCR_TESSERACT", "auto").strip().lower()
-    if flag in ("0", "no", "false", "off"):
+    """Legacy engine: opt-in only (OCR_TESSERACT=1)."""
+    if not _tesseract_forced():
         return False
     exe = shutil.which("tesseract")
     if not exe:
@@ -422,7 +489,7 @@ def ocr_image(image_path: str | Path) -> OCRResult:
             variants = [Variant("original", image_path)]
 
         if backend == "tesseract":
-            # Local OCR: every variant is cheap, try all, best score wins
+            # Legacy local OCR: every variant is cheap, try all, best score wins
             for variant in variants:
                 attempts += 1
                 try:
@@ -440,6 +507,30 @@ def ocr_image(image_path: str | Path) -> OCRResult:
             if best_text:
                 best_text = llm_cleanup_ocr(best_text)
                 best_score = max(best_score, ocr_quality_score(best_text))
+        elif backend == "vision_api":
+            # Vision API: costs money per call — fast model on the original
+            # first, quality model on preprocessed variants if needed
+            for i, variant in enumerate(variants):
+                if attempts >= MAX_ATTEMPTS:
+                    break
+                model = VISION_API_MODEL_FAST if i == 0 else VISION_API_MODEL
+                attempts += 1
+                try:
+                    text = _vision_api_read(variant.path, model)
+                except (RuntimeError, requests.RequestException) as exc:
+                    log.warning("Vision API OCR failed on %s: %s", variant.name, exc)
+                    scores[variant.name] = 0.0
+                    continue
+                score = ocr_quality_score(text)
+                scores[variant.name] = score
+                log.info("Vision API variant=%s model=%s score=%.3f chars=%d",
+                         variant.name, model, score, len(text))
+                if score > best_score:
+                    best_text, best_variant, best_score = text, variant.name, score
+                if best_score >= 0.55:
+                    break
+            if best_text:
+                best_text = llm_cleanup_ocr(best_text)
         else:
             # Vision LLM: attempts cost tokens — stop at first good candidate
             for i, variant in enumerate(variants):

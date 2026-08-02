@@ -228,6 +228,96 @@ class TestTesseractRecovery:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Vision API client (mocked OpenAI-compatible endpoint)
+# ─────────────────────────────────────────────────────────────────────────────
+class TestVisionApiClient:
+    def _run_mock_server(self, captured: dict):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        import json as _json
+        import threading
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                captured["request"] = _json.loads(body)
+                captured["path"] = self.path
+                payload = _json.dumps({
+                    "choices": [{"message": {"content": "Гемоглобин 145 г/л 130-160"}}]
+                }).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *a):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server
+
+    def test_request_shape_and_parsing(self, tmp_path, monkeypatch):
+        captured: dict = {}
+        server = self._run_mock_server(captured)
+        try:
+            monkeypatch.setattr(image_ocr, "VISION_API_BASE",
+                                f"http://127.0.0.1:{server.server_port}")
+            monkeypatch.setattr(image_ocr, "VISION_API_KEY", "test-key")
+            src = tmp_path / "photo.jpg"
+            cv2.imwrite(str(src), render_lab_image())
+
+            text = image_ocr._vision_api_read(src, "gemini-2.5-flash-lite")
+
+            assert text == "Гемоглобин 145 г/л 130-160"
+            req = captured["request"]
+            assert captured["path"] == "/chat/completions"
+            assert req["model"] == "gemini-2.5-flash-lite"
+            assert req["temperature"] == 0.0
+            parts = req["messages"][0]["content"]
+            assert parts[0]["type"] == "text" and "медицинского" in parts[0]["text"]
+            assert parts[1]["type"] == "image_url"
+            assert parts[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        finally:
+            server.shutdown()
+
+    def test_backend_auto_prefers_vision_api(self, monkeypatch):
+        monkeypatch.delenv("OCR_BACKEND", raising=False)
+        monkeypatch.setattr(image_ocr, "VISION_API_KEY", "k")
+        assert image_ocr.ocr_backend() == "vision_api"
+        monkeypatch.setattr(image_ocr, "VISION_API_KEY", "")
+        monkeypatch.setenv("OCR_BACKEND", "tesseract")
+        assert image_ocr.ocr_backend() == "tesseract"
+
+    def test_error_body_raises(self, tmp_path, monkeypatch):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        import threading
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(429)
+                self.end_headers()
+                self.wfile.write(b"rate limited")
+
+            def log_message(self, *a):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            monkeypatch.setattr(image_ocr, "VISION_API_BASE",
+                                f"http://127.0.0.1:{server.server_port}")
+            monkeypatch.setattr(image_ocr, "VISION_API_KEY", "k")
+            src = tmp_path / "photo.jpg"
+            cv2.imwrite(str(src), render_lab_image())
+            with pytest.raises(RuntimeError, match="429"):
+                image_ocr._vision_api_read(src)
+        finally:
+            server.shutdown()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Diary parsing
 # ─────────────────────────────────────────────────────────────────────────────
 class TestDiaryParsing:
