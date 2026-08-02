@@ -12,11 +12,39 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _client = None
+_schema_ready = False
+
+
+def ensure_schema() -> None:
+    """Run schema.sql (idempotent CREATE IF NOT EXISTS) once per process.
+    Uses a separate client on the default DB because the target database
+    itself is created by the schema."""
+    global _schema_ready
+    if _schema_ready:
+        return
+    schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
+    try:
+        ddl_client = clickhouse_connect.get_client(
+            host=os.getenv("CH_HOST", "localhost"),
+            port=int(os.getenv("CH_PORT", "8123")),
+            database="default",
+            username=os.getenv("CH_USER", "default"),
+            password=os.getenv("CH_PASSWORD", ""),
+        )
+        with open(schema_path, encoding="utf-8") as f:
+            for statement in f.read().split(";"):
+                if statement.strip():
+                    ddl_client.command(statement)
+        _schema_ready = True
+    except Exception as exc:
+        import logging
+        logging.getLogger("health-bot").warning("ensure_schema failed: %s", exc)
 
 
 def get_client() -> clickhouse_connect.driver.Client:
     global _client
     if _client is None:
+        ensure_schema()
         _client = clickhouse_connect.get_client(
             host=os.getenv("CH_HOST", "localhost"),
             port=int(os.getenv("CH_PORT", "8123")),
@@ -105,6 +133,95 @@ def insert_upload_log(
     ])
 
 
+# ─── Diary ───────────────────────────────────────────────────────────────────
+def insert_diary_entry(entry: dict, owner_id: str = "") -> str:
+    """Insert a diary entry; returns its id (str)."""
+    client = get_client()
+    entry_id = entry.get("id") or str(uuid.uuid4())
+    client.insert("diary_entries", [[
+        entry_id, owner_id, entry.get("ts") or datetime.now(),
+        entry["entry_type"], entry["text"],
+        entry.get("wellbeing_score"), entry.get("sleep_hours"),
+        entry.get("energy_score"), entry.get("mood_score"),
+        entry.get("symptoms", ""), entry.get("tags", []),
+        entry.get("status", "active"), entry.get("source", "telegram"),
+    ]], column_names=[
+        "id", "owner_id", "ts", "entry_type", "text",
+        "wellbeing_score", "sleep_hours", "energy_score", "mood_score",
+        "symptoms", "tags", "status", "source",
+    ])
+    return entry_id
+
+
+def query_diary_entries(owner_id: str = "", limit: int = 10,
+                        entry_type: str | None = None,
+                        days: int | None = None) -> list[dict]:
+    client = get_client()
+    where = f"WHERE {_own(owner_id)}"
+    params: dict = {"lim": limit}
+    if entry_type:
+        where += " AND entry_type = {et:String}"
+        params["et"] = entry_type
+    if days:
+        where += " AND ts >= now() - INTERVAL {d:UInt32} DAY"
+        params["d"] = days
+    result = client.query(
+        f"SELECT id, ts, entry_type, text, wellbeing_score, sleep_hours, "
+        f"energy_score, mood_score, symptoms, status FROM diary_entries FINAL "
+        f"{where} ORDER BY ts DESC LIMIT {{lim:UInt32}}",
+        parameters=params,
+    )
+    return [dict(zip(result.column_names, row)) for row in result.result_rows]
+
+
+def query_hypotheses(owner_id: str = "", status: str | None = None,
+                     limit: int = 20) -> list[dict]:
+    client = get_client()
+    where = f"WHERE {_own(owner_id)} AND entry_type = 'hypothesis'"
+    params: dict = {"lim": limit}
+    if status:
+        where += " AND status = {st:String}"
+        params["st"] = status
+    result = client.query(
+        f"SELECT id, ts, text, status FROM diary_entries FINAL "
+        f"{where} ORDER BY ts DESC LIMIT {{lim:UInt32}}",
+        parameters=params,
+    )
+    return [dict(zip(result.column_names, row)) for row in result.result_rows]
+
+
+def set_hypothesis_status(owner_id: str, entry_id: str, status: str,
+                          match_text: str = "") -> dict | None:
+    """Re-insert the hypothesis with a new status (ReplacingMergeTree swap).
+    If match_text given, the row's text must contain it (case-insensitive).
+    Returns the updated row or None if not found."""
+    client = get_client()
+    result = client.query(
+        f"SELECT id, ts, entry_type, text, wellbeing_score, sleep_hours, "
+        f"energy_score, mood_score, symptoms, tags, status, source "
+        f"FROM diary_entries FINAL "
+        f"WHERE {_own(owner_id)} AND id = {{eid:String}} AND entry_type = 'hypothesis' "
+        f"ORDER BY ts DESC LIMIT 1",
+        parameters={"eid": entry_id},
+    )
+    if not result.result_rows:
+        return None
+    row = dict(zip(result.column_names, result.result_rows[0]))
+    if match_text and match_text.lower() not in row["text"].lower():
+        return None
+    row["status"] = status
+    insert_diary_entry(row, owner_id)
+    return row
+
+
+def find_latest_active_hypothesis(owner_id: str, match_text: str = "") -> dict | None:
+    """Latest active hypothesis, optionally filtered by substring."""
+    hypotheses = query_hypotheses(owner_id, status="active", limit=50)
+    if match_text:
+        hypotheses = [h for h in hypotheses if match_text.lower() in h["text"].lower()]
+    return hypotheses[0] if hypotheses else None
+
+
 # ─── Queries (all filtered by owner_id) ─────────────────────────────────────
 def query_recent_chat(limit: int = 10, owner_id: str = "") -> list[dict]:
     client = get_client()
@@ -166,10 +283,11 @@ def query_summary_stats(owner_id: str = "") -> dict:
         f"uniqExact(source_file) FROM lab_results WHERE {_own(owner_id)}"
     )
     row = r.result_rows[0] if r.result_rows else (0, None, None, 0, 0)
+    has_data = bool(row[0])
     return {
         "total_records": row[0],
-        "earliest_date": str(row[1]) if row[1] else "N/A",
-        "latest_date": str(row[2]) if row[2] else "N/A",
+        "earliest_date": str(row[1]) if has_data and row[1] else "N/A",
+        "latest_date": str(row[2]) if has_data and row[2] else "N/A",
         "unique_biomarkers": row[3],
         "unique_files": row[4],
     }
@@ -285,13 +403,40 @@ def query_recent_digests(days: int = 7, owner_id: str = "") -> str:
     return "\n".join(lines)
 
 
+def query_diary_for_context(owner_id: str = "", days: int = 14,
+                            limit: int = 30) -> str:
+    """Compact diary block for the LLM context."""
+    rows = query_diary_entries(owner_id, limit=limit, days=days)
+    if not rows:
+        return ""
+    lines = []
+    for r in reversed(rows):
+        ts = r["ts"].strftime("%d.%m %H:%M") if hasattr(r["ts"], "strftime") else str(r["ts"])[:16]
+        line = f"  {ts} | {r['entry_type']}: {r['text'][:250]}"
+        extras = []
+        if r.get("wellbeing_score") is not None:
+            extras.append(f"самочувствие {r['wellbeing_score']}/10")
+        if r.get("sleep_hours") is not None:
+            extras.append(f"сон {r['sleep_hours']}ч")
+        if r.get("symptoms"):
+            extras.append(f"симптомы: {r['symptoms']}")
+        if r["entry_type"] == "hypothesis":
+            extras.append(f"статус: {r.get('status', 'active')}")
+        if extras:
+            line += " (" + "; ".join(extras) + ")"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def query_for_llm_context(question: str, owner_id: str = "") -> str:
     stats = query_summary_stats(owner_id)
     profile = query_health_profile(owner_id)
     digests = query_recent_digests(7, owner_id)
+    diary_block = query_diary_for_context(owner_id)
+    hypotheses = query_hypotheses(owner_id, status="active")
 
-    if stats["total_records"] == 0 and not profile:
-        return "(Нет данных в базе. Загрузите анализы через PDF.)"
+    if stats["total_records"] == 0 and not profile and not diary_block:
+        return "(Нет данных в базе. Загрузите анализы через PDF или ведите дневник.)"
 
     client = get_client()
 
@@ -332,6 +477,15 @@ def query_for_llm_context(question: str, owner_id: str = "") -> str:
         sections.append(f"=== HEALTH PROFILE ===\n{profile}")
     if digests:
         sections.append(f"=== ДАЙДЖЕСТЫ (7 дней) ===\n{digests}")
+    if diary_block:
+        sections.append(f"=== ДНЕВНИК ЗДОРОВЬЯ (14 дней) ===\n{diary_block}")
+    if hypotheses:
+        hypo_lines = "\n".join(f"  {h['ts'].strftime('%d.%m') if hasattr(h['ts'], 'strftime') else h['ts']}: {h['text'][:250]}"
+                               for h in hypotheses)
+        sections.append(
+            f"=== АКТИВНЫЕ ГИПОТЕЗЫ ПОЛЬЗОВАТЕЛЯ ===\n{hypo_lines}\n"
+            f"Учитывай эти гипотезы в рассуждениях: подтверждай или опровергай их "
+            f"данными анализов и дневника, говори когда новые данные проливают на них свет.")
 
     sections.append(
         f"=== БАЗА ===\nЗаписей: {stats['total_records']}, "

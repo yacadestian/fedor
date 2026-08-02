@@ -173,6 +173,26 @@ CREATE TABLE IF NOT EXISTS health_analytics.clinical_lessons (
 ) ENGINE = MergeTree()
 ORDER BY (condition, created_at);
 
+-- Health diary: wellbeing, symptoms, notes, hypotheses
+-- ReplacingMergeTree on (owner_id, id): re-inserting a row with the same id
+-- (used for hypothesis status changes) replaces the previous version.
+CREATE TABLE IF NOT EXISTS health_analytics.diary_entries (
+    id UUID DEFAULT generateUUIDv4(),
+    owner_id String,
+    ts DateTime DEFAULT now(),
+    entry_type LowCardinality(String),
+    text String,
+    wellbeing_score Nullable(UInt8),
+    sleep_hours Nullable(Float64),
+    energy_score Nullable(UInt8),
+    mood_score Nullable(UInt8),
+    symptoms String DEFAULT '',
+    tags Array(String) DEFAULT [],
+    status LowCardinality(String) DEFAULT 'active',
+    source LowCardinality(String) DEFAULT 'telegram'
+) ENGINE = ReplacingMergeTree()
+ORDER BY (owner_id, id);
+
 -- Reminders
 CREATE TABLE IF NOT EXISTS health_analytics.reminders (
     id UUID DEFAULT generateUUIDv4(),
