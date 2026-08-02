@@ -6,11 +6,15 @@ multi-pass Claude Vision with per-candidate quality scoring → optional
 Tesseract cross-check. The best-scoring transcription wins.
 
 Env knobs:
+    OCR_BACKEND        auto|vision|tesseract (default auto: vision when the
+                       Claude CLI is the LLM provider, tesseract otherwise —
+                       DeepSeek API is text-only, so photos go through Tesseract)
     OCR_VISION_MODEL   vision model for attempts (default claude-sonnet-4-6)
     OCR_FINAL_MODEL    stronger model for the last attempt (default = OCR_VISION_MODEL)
     OCR_MAX_ATTEMPTS   max vision attempts across variants (default 3)
     OCR_TIMEOUT        per-attempt timeout seconds (default 180)
     OCR_TESSERACT      1/0 force tesseract cross-check, default auto (on if rus data present)
+    OCR_CLEANUP        1/0 LLM post-correction of OCR text (default 1)
 """
 from __future__ import annotations
 
@@ -76,6 +80,34 @@ _REFUSAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+_CLEANUP_PROMPT = """Ниже — результат OCR медицинского документа. В нём есть ошибки распознавания.
+
+ЗАДАЧА: исправь очевидные OCR-ошибки и верни чистый текст.
+
+ПРАВИЛА:
+1. Исправляй типичные OCR-подмены: О↔0, л↔1, З↔3, В↔8, |↔1, разорванные слова
+2. Восстанови структуру строк: показатель — значение — единицы — норма
+3. НЕ ПРИДУМЫВАЙ значения и не угадывай числа: если число явно повреждено и не восстанавливается из контекста — оставь ?
+4. Сохрани все показатели, ничего не удаляй
+5. Верни ТОЛЬКО исправленный текст, без комментариев
+
+=== OCR-ТЕКСТ ===
+"""
+
+
+def ocr_backend() -> str:
+    """Which OCR engine to use: vision LLM or local Tesseract."""
+    forced = os.getenv("OCR_BACKEND", "auto").strip().lower()
+    if forced in ("vision", "tesseract"):
+        return forced
+    try:
+        import llm
+        if llm.provider() == "claude" and shutil.which("claude"):
+            return "vision"
+    except Exception:
+        pass
+    return "tesseract" if _tesseract_available() else "vision"
+
 
 @dataclass
 class QualityInfo:
@@ -103,6 +135,7 @@ class OCRResult:
     attempts: int
     quality: QualityInfo
     scores: dict[str, float] = field(default_factory=dict)
+    backend: str = "vision"
 
     @property
     def ok(self) -> bool:
@@ -111,14 +144,17 @@ class OCRResult:
     @property
     def user_note(self) -> str:
         """Short human-readable note about what it took to read the photo."""
-        if not self.quality.poor:
-            return ""
-        parts = ["📸 Фото низкого качества ({})".format(", ".join(self.quality.issues))]
+        parts = []
+        if self.quality.poor:
+            parts.append("📸 Фото низкого качества ({})".format(", ".join(self.quality.issues)))
         if self.variant != "original":
             parts.append(f"применил улучшение изображения ({self.variant})")
         if self.attempts > 1:
             parts.append(f"попыток распознавания: {self.attempts}")
-        if self.score < 0.55:
+        if self.backend == "tesseract":
+            parts.append("⚠️ распознано локальным OCR без визуальной проверки — "
+                         "цифры могли исказиться, сверь ключевые значения с оригиналом")
+        elif self.score < 0.55:
             parts.append("⚠️ часть текста могла быть нечитаема — проверь значения")
         return " — ".join(parts)
 
@@ -334,6 +370,25 @@ def _tesseract_ocr(image_path: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def llm_cleanup_ocr(text: str) -> str:
+    """Post-correct OCR garbage with the text LLM. Returns cleaned text or,
+    on failure, the original."""
+    if os.getenv("OCR_CLEANUP", "1").strip().lower() in ("0", "no", "false", "off"):
+        return text
+    try:
+        import llm
+        if not llm.available():
+            return text
+        cleaned = llm.chat(_CLEANUP_PROMPT + text[:12000], tier="fast",
+                           timeout=90, temperature=0.0)
+        if cleaned and len(cleaned) >= len(text) * 0.5:
+            log.info("OCR cleanup: %d → %d chars", len(text), len(cleaned))
+            return cleaned
+    except Exception as exc:
+        log.warning("OCR cleanup failed, keeping raw OCR: %s", exc)
+    return text
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -342,14 +397,18 @@ def ocr_image(image_path: str | Path) -> OCRResult:
 
     Tries the original first, then preprocessed variants until a candidate
     scores well; returns the best-scoring transcription overall.
+    Backend: vision LLM (Claude) or Tesseract (DeepSeek provider) with
+    optional LLM post-correction.
     """
     image_path = Path(image_path)
     img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError(f"Cannot decode image: {image_path}")
     quality = assess_quality(img)
-    log.info("Photo quality: blur=%.0f brightness=%.0f long_side=%d issues=%s",
-             quality.blur_var, quality.brightness, quality.long_side, quality.issues or "none")
+    backend = ocr_backend()
+    log.info("Photo quality: blur=%.0f brightness=%.0f long_side=%d issues=%s | backend=%s",
+             quality.blur_var, quality.brightness, quality.long_side,
+             quality.issues or "none", backend)
 
     scores: dict[str, float] = {}
     best_text, best_variant, best_score = "", "original", 0.0
@@ -362,41 +421,61 @@ def ocr_image(image_path: str | Path) -> OCRResult:
             log.warning("Preprocessing failed, OCR on original only: %s", exc)
             variants = [Variant("original", image_path)]
 
-        # If quality is fine, original usually suffices; variants are the safety net
-        for i, variant in enumerate(variants):
-            if attempts >= MAX_ATTEMPTS:
-                break
-            model = FINAL_MODEL if i == len(variants) - 1 and attempts > 0 else VISION_MODEL
-            attempts += 1
-            try:
-                text = _vision_read(variant.path, model)
-            except (RuntimeError, subprocess.TimeoutExpired) as exc:
-                log.warning("Vision OCR failed on %s: %s", variant.name, exc)
-                scores[variant.name] = 0.0
-                continue
-            score = ocr_quality_score(text)
-            scores[variant.name] = score
-            log.info("OCR variant=%s model=%s score=%.3f chars=%d",
-                     variant.name, model, score, len(text))
-            if score > best_score:
-                best_text, best_variant, best_score = text, variant.name, score
-            if best_score >= 0.55:
-                break  # good enough, stop spending tokens
+        if backend == "tesseract":
+            # Local OCR: every variant is cheap, try all, best score wins
+            for variant in variants:
+                attempts += 1
+                try:
+                    text = _tesseract_ocr(variant.path)
+                except Exception as exc:
+                    log.warning("Tesseract failed on %s: %s", variant.name, exc)
+                    scores[variant.name] = 0.0
+                    continue
+                score = ocr_quality_score(text)
+                scores[variant.name] = score
+                log.info("Tesseract variant=%s score=%.3f chars=%d",
+                         variant.name, score, len(text))
+                if score > best_score:
+                    best_text, best_variant, best_score = text, variant.name, score
+            if best_text:
+                best_text = llm_cleanup_ocr(best_text)
+                best_score = max(best_score, ocr_quality_score(best_text))
+        else:
+            # Vision LLM: attempts cost tokens — stop at first good candidate
+            for i, variant in enumerate(variants):
+                if attempts >= MAX_ATTEMPTS:
+                    break
+                model = FINAL_MODEL if i == len(variants) - 1 and attempts > 0 else VISION_MODEL
+                attempts += 1
+                try:
+                    text = _vision_read(variant.path, model)
+                except (RuntimeError, subprocess.TimeoutExpired) as exc:
+                    log.warning("Vision OCR failed on %s: %s", variant.name, exc)
+                    scores[variant.name] = 0.0
+                    continue
+                score = ocr_quality_score(text)
+                scores[variant.name] = score
+                log.info("OCR variant=%s model=%s score=%.3f chars=%d",
+                         variant.name, model, score, len(text))
+                if score > best_score:
+                    best_text, best_variant, best_score = text, variant.name, score
+                if best_score >= 0.55:
+                    break  # good enough, stop spending tokens
 
-        # Tesseract cross-check on the binarized variant (opt-in / auto)
-        if best_score < 0.55 and _tesseract_available():
-            tess_src = variants[-1].path if len(variants) > 1 else image_path
-            try:
-                tess_text = _tesseract_ocr(tess_src)
-                tess_score = ocr_quality_score(tess_text) * 0.8  # discount: no layout reasoning
-                scores["tesseract"] = round(tess_score, 3)
-                log.info("Tesseract score=%.3f chars=%d", tess_score, len(tess_text))
-                if tess_score > best_score:
-                    best_text, best_variant, best_score = tess_text, "tesseract", tess_score
-            except Exception as exc:
-                log.warning("Tesseract failed: %s", exc)
+            # Tesseract cross-check on the binarized variant (opt-in / auto)
+            if best_score < 0.55 and _tesseract_available():
+                tess_src = variants[-1].path if len(variants) > 1 else image_path
+                try:
+                    tess_text = _tesseract_ocr(tess_src)
+                    tess_score = ocr_quality_score(tess_text) * 0.8  # discount: no layout reasoning
+                    scores["tesseract"] = round(tess_score, 3)
+                    log.info("Tesseract score=%.3f chars=%d", tess_score, len(tess_text))
+                    if tess_score > best_score:
+                        best_text, best_variant, best_score = tess_text, "tesseract", tess_score
+                except Exception as exc:
+                    log.warning("Tesseract failed: %s", exc)
 
     return OCRResult(
         text=best_text, variant=best_variant, score=best_score,
-        attempts=attempts, quality=quality, scores=scores,
+        attempts=attempts, quality=quality, scores=scores, backend=backend,
     )

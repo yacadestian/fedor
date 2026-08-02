@@ -44,11 +44,20 @@ def render_lab_image() -> np.ndarray:
 
 
 def degrade(img: np.ndarray) -> np.ndarray:
-    """Blur + darken + downscale + noise — a 'bad phone photo'."""
+    """Extreme degradation for quality-assessment tests (beyond rescue)."""
     out = cv2.resize(img, (img.shape[1] // 3, img.shape[0] // 3), interpolation=cv2.INTER_AREA)
     out = cv2.GaussianBlur(out, (7, 7), 0)
     out = cv2.convertScaleAbs(out, alpha=0.55, beta=-30)
     noise = np.random.default_rng(42).normal(0, 12, out.shape).astype(np.int16)
+    return np.clip(out.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+
+def degrade_realistic(img: np.ndarray) -> np.ndarray:
+    """Realistic bad phone shot: half resolution, moderate blur, dim light, noise."""
+    out = cv2.resize(img, (img.shape[1] // 2, img.shape[0] // 2), interpolation=cv2.INTER_AREA)
+    out = cv2.GaussianBlur(out, (5, 5), 0)
+    out = cv2.convertScaleAbs(out, alpha=0.62, beta=-15)
+    noise = np.random.default_rng(7).normal(0, 8, out.shape).astype(np.int16)
     return np.clip(out.astype(np.int16) + noise, 0, 255).astype(np.uint8)
 
 
@@ -166,6 +175,56 @@ class TestOcrScoring:
             attempts=3, quality=image_ocr.QualityInfo())
         assert good.ok
         assert not bad.ok
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tesseract recovery on a realistic bad photo (skipped without tesseract+rus)
+# ─────────────────────────────────────────────────────────────────────────────
+def _tesseract_ready() -> bool:
+    import shutil
+    import subprocess
+    exe = shutil.which("tesseract")
+    if not exe:
+        return False
+    try:
+        langs = subprocess.run([exe, "--list-langs"], capture_output=True,
+                               text=True, timeout=10).stdout
+        return "rus" in langs
+    except Exception:
+        return False
+
+
+class TestTesseractRecovery:
+    @pytest.mark.skipif(not _tesseract_ready(), reason="tesseract with rus not installed")
+    def test_preprocessing_recovers_text(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OCR_BACKEND", "tesseract")
+        monkeypatch.setenv("OCR_CLEANUP", "0")  # no LLM in offline tests
+        src = tmp_path / "photo.jpg"
+        cv2.imwrite(str(src), degrade_realistic(render_lab_image()))
+
+        result = image_ocr.ocr_image(src)
+        text = result.text
+        recovered = sum(1 for kw in ["Гемоглобин", "Эритроциты", "Лейкоциты",
+                                     "Тромбоциты", "Глюкоза", "Креатинин",
+                                     "АЛТ", "Ферритин"] if kw.lower() in text.lower())
+        # Raw Tesseract floor (no LLM cleanup in offline mode); production
+        # quality bar is higher thanks to the LLM post-correction pass.
+        assert recovered >= 4, f"recovered {recovered}/8 biomarker names\n{text}"
+        assert result.ok, f"score {result.score}, scores {result.scores}"
+
+    @pytest.mark.skipif(not _tesseract_ready(), reason="tesseract with rus not installed")
+    def test_preprocessed_beats_raw_original(self, tmp_path):
+        src = tmp_path / "photo.jpg"
+        degraded = degrade_realistic(render_lab_image())
+        cv2.imwrite(str(src), degraded)
+        info = image_ocr.assess_quality(cv2.imread(str(src)))
+        variants = image_ocr.build_variants(src, tmp_path, info)
+        score_raw = image_ocr.ocr_quality_score(image_ocr._tesseract_ocr(variants[0].path))
+        best = max(
+            (image_ocr.ocr_quality_score(image_ocr._tesseract_ocr(v.path)) for v in variants[1:]),
+            default=0.0,
+        )
+        assert best > score_raw, f"preprocessing should help: raw={score_raw} best={best}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

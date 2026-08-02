@@ -5,7 +5,8 @@ Personal health analytics system via Telegram. Upload lab results (PDF, photo, t
 **Not a toy calorie counter.** A clinical-depth system that tracks amino acid profiles, drug-nutrient interactions, SPC control charts, and builds personalized health profiles.
 
 > **This fork adds** (on top of [petrovich-health](https://github.com/petrovich-opendev/petrovich-health)):
-> - **Robust OCR for low-quality photos** — OpenCV preprocessing (upscale, denoise, CLAHE, unsharp mask, deskew, adaptive binarization), quality assessment, multi-pass vision with per-candidate scoring, optional Tesseract cross-check (`image_ocr.py`)
+> - **LLM provider abstraction** (`llm.py`) — DeepSeek API (V4) or Claude CLI behind one interface with fast/smart tiers; DeepSeek V4 thinking mode is disabled for deterministic tasks (extraction, OCR cleanup) and enabled for Q&A
+> - **Robust OCR for low-quality photos** — OpenCV preprocessing (upscale, denoise, CLAHE, unsharp mask, deskew, adaptive binarization), quality assessment, multi-pass with per-candidate scoring (`image_ocr.py`). Backend is picked automatically: Claude Vision when the Claude CLI is available, **local Tesseract + LLM post-correction** on DeepSeek (its API is text-only)
 > - **Health diary** — timestamped wellbeing/symptom/note entries with structured scores, and **personal hypotheses** with lifecycle (active → confirmed/rejected); diary flows into the LLM context (`diary.py`)
 > - **Text mirroring** — every recognized PDF/photo is mirrored to a `.txt` file next to the source in `data/`
 > - **Auto-schema** — ClickHouse tables are created automatically on first run
@@ -76,7 +77,10 @@ ClickHouse (11 tables)
 
 - Python 3.11+
 - ClickHouse (local or remote)
-- Claude CLI (`claude` command) with active subscription (MAX or API)
+- **LLM — one of:**
+  - **DeepSeek API key** (`DEEPSEEK_API_KEY` in `.env`) — V4-Flash for extraction/cleanup, V4-Pro for Q&A. Note: DeepSeek API is text-only, so photo OCR goes through local Tesseract + LLM cleanup
+  - **Claude CLI** (`claude` command) with active subscription (MAX or API) — enables vision OCR for photos
+- **Tesseract with Russian data** (required for photo OCR on DeepSeek, optional cross-check otherwise): `apt install tesseract-ocr tesseract-ocr-rus`
 - Telegram Bot (create via @BotFather)
 
 ## Quick Start
@@ -144,10 +148,16 @@ clickhouse-client -q "GRANT ALL ON health_analytics.* TO health_bot"
 | `гипотеза опровергнута` | Latest hypothesis marked rejected |
 | `дневник: начал принимать магний` | Free-form note |
 
-## OCR quality knobs (.env)
+## LLM & OCR knobs (.env)
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `LLM_PROVIDER` | auto | `deepseek` or `claude`; auto = DeepSeek if `DEEPSEEK_API_KEY` set, else Claude CLI |
+| `DEEPSEEK_MODEL_FAST` | `deepseek-v4-flash` | Extraction, classification, OCR cleanup |
+| `DEEPSEEK_MODEL_SMART` | `deepseek-v4-pro` | Q&A, health profile, digests |
+| `DEEPSEEK_THINKING` | `fast=disabled,smart=enabled` | V4 thinking mode per tier. Reasoning tokens share the completion budget — deterministic tasks run non-thinking |
+| `OCR_BACKEND` | `auto` | `vision` (Claude) or `tesseract` (local); auto = vision when Claude CLI present |
+| `OCR_CLEANUP` | `1` | LLM post-correction of OCR text (fixes typical OCR letter/digit confusions) |
 | `OCR_VISION_MODEL` | `claude-sonnet-4-6` | Model for vision attempts |
 | `OCR_FINAL_MODEL` | = `OCR_VISION_MODEL` | Stronger model for the last attempt (e.g. `claude-opus-4-6`) |
 | `OCR_MAX_ATTEMPTS` | `3` | Max vision attempts across image variants |
