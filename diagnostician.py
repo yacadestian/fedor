@@ -18,7 +18,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
@@ -61,14 +60,20 @@ def get_ch():
 
 
 def call_claude(prompt: str, model: str, timeout: int = 180) -> str:
-    logging.info("Calling claude model=%s (%d chars)", model, len(prompt))
-    result = subprocess.run(
-        ["claude", "-p", "--model", model, prompt],
-        capture_output=True, text=True, timeout=timeout,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"claude failed (rc={result.returncode}): {result.stderr[:300]}")
-    return result.stdout.strip()
+    """Legacy name kept; routes through the provider abstraction (DeepSeek/Claude)."""
+    import llm
+    tier = "smart" if "opus" in model or "pro" in model else "fast"
+    logging.info("LLM call tier=%s (%d chars)", tier, len(prompt))
+    return llm.chat(prompt, tier=tier, timeout=timeout, temperature=0.0)
+
+
+def _model_label(model: str) -> str:
+    """Label for the model column: real model id of the active provider/tier."""
+    import llm
+    tier = "smart" if "opus" in model or "pro" in model else "fast"
+    if llm.provider() == "deepseek":
+        return llm.DEEPSEEK_MODELS.get(tier, tier)
+    return model
 
 
 def send_telegram(text: str, chat_id: str | None = None) -> bool:
@@ -159,7 +164,7 @@ def run_digest(log: logging.Logger, owner_id: str = "") -> int:
         data.get("topics", []),
         data.get("user_concerns", ""),
         data.get("new_info", ""),
-        "claude-haiku-4-5-20251001",
+        _model_label("claude-haiku-4-5-20251001"),
         owner_id,
     ]], column_names=["date", "digest", "topics", "user_concerns", "new_info", "model", "owner_id"])
 
@@ -331,7 +336,7 @@ def run_profile(log: logging.Logger, owner_id: str = "") -> int:
         json.dumps(data.get("missing_data", []), ensure_ascii=False),
         json.dumps(data.get("alerts", []), ensure_ascii=False),
         data_hash,
-        "claude-opus-4-6",
+        _model_label("claude-opus-4-6"),
         owner_id,
     ]], column_names=[
         "date", "profile_text", "overall_status", "key_findings",

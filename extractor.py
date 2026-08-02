@@ -4,8 +4,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-import subprocess
 from datetime import date
+
+from llm import chat as llm_chat
 
 log = logging.getLogger("health-bot")
 
@@ -67,29 +68,16 @@ EXTRACTION_PROMPT = """Ты — медицинский парсер лабора
 """
 
 
-def classify_document(
-    raw_text: str,
-    model: str = "claude-haiku-4-5-20251001",
-    timeout: int = 60,
-) -> dict:
-    """
-    Classify a medical document before extraction.
-    Uses Haiku — cheap and fast, classification is simple.
-    """
+def classify_document(raw_text: str, timeout: int = 60) -> dict:
+    """Classify a medical document before extraction (fast tier LLM)."""
     prompt = CLASSIFICATION_PROMPT + raw_text[:8000]
     try:
-        log.info("Classifying document with model=%s (%d chars)", model, len(raw_text))
-        result = subprocess.run(
-            ["claude", "-p", "--model", model, prompt],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode == 0:
-            parsed = _parse_json(result.stdout.strip())
-            if parsed and "doc_class" in parsed:
-                log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
-                return parsed
+        log.info("Classifying document (%d chars)", len(raw_text))
+        answer = llm_chat(prompt, tier="fast", timeout=timeout, temperature=0.0)
+        parsed = _parse_json(answer)
+        if parsed and "doc_class" in parsed:
+            log.info("Classified: doc_class=%s doc_type=%s", parsed["doc_class"], parsed.get("doc_type"))
+            return parsed
     except Exception as exc:
         log.warning("Classification failed: %s", exc)
 
@@ -97,45 +85,22 @@ def classify_document(
             "collected_at": None, "lab_name": None}
 
 
-def extract_biomarkers(
-    raw_text: str,
-    primary_model: str = "claude-sonnet-4-6",
-    fallback_model: str = "claude-haiku-4-5-20251001",
-    timeout: int = 120,
-) -> dict:
+def extract_biomarkers(raw_text: str, timeout: int = 120) -> dict:
     """
-    Send raw PDF text to LLM for structured extraction.
-
-    Uses Sonnet as primary (good quality, fast) and Haiku as fallback.
-    Opus is overkill for structured extraction — save tokens for Q&A.
+    Send raw document text to LLM for structured extraction.
 
     Returns dict with keys: collected_at, lab_name, results (list of biomarkers).
     """
     prompt = EXTRACTION_PROMPT + raw_text[:15000]  # limit to avoid token overflow
-
-    for model in [primary_model, fallback_model]:
-        try:
-            log.info("Extracting biomarkers with model=%s (text %d chars)", model, len(raw_text))
-            result = subprocess.run(
-                ["claude", "-p", "--model", model, prompt],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            if result.returncode != 0:
-                log.warning("claude CLI failed (rc=%d) model=%s: %s",
-                            result.returncode, model, result.stderr.strip()[:200])
-                continue
-
-            parsed = _parse_json(result.stdout.strip())
-            if parsed and "results" in parsed:
-                log.info("Extracted %d biomarkers with %s", len(parsed["results"]), model)
-                return parsed
-
-        except subprocess.TimeoutExpired:
-            log.warning("Extraction timeout model=%s", model)
-        except Exception as exc:
-            log.warning("Extraction error model=%s: %s", model, exc)
+    try:
+        log.info("Extracting biomarkers (text %d chars)", len(raw_text))
+        answer = llm_chat(prompt, tier="fast", timeout=timeout, temperature=0.0)
+        parsed = _parse_json(answer)
+        if parsed and "results" in parsed:
+            log.info("Extracted %d biomarkers", len(parsed["results"]))
+            return parsed
+    except Exception as exc:
+        log.warning("Extraction error: %s", exc)
 
     raise RuntimeError("Failed to extract biomarkers from PDF text")
 

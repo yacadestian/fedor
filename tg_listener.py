@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import sys
 import time
 import traceback
@@ -65,9 +64,7 @@ MSK_TZ = timezone(timedelta(hours=3))
 POLL_TIMEOUT_SEC = 30
 ERROR_BACKOFF_SEC = 10
 MAX_MSG_LEN = 3800
-LLM_PRIMARY = "claude-opus-4-6"
-LLM_FALLBACK = "claude-sonnet-4-6"
-LLM_TIMEOUT = 120
+LLM_TIMEOUT = 180
 
 load_dotenv(PROJECT_DIR / ".env")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -920,28 +917,15 @@ def ask_llm(question: str, owner_id: str = "") -> str:
 - Ключевые цифры выделяй <b>жирным</b>
 - В конце: "💬 Скажи <i>подробнее</i> для развёрнутого ответа" — если тема позволяет"""
 
-    for model in [LLM_PRIMARY, LLM_FALLBACK]:
-        try:
-            log.info("LLM Q&A model=%s question='%s'", model, question[:80])
-            result = subprocess.run(
-                ["claude", "-p", "--model", model, prompt],
-                capture_output=True,
-                text=True,
-                timeout=LLM_TIMEOUT,
-            )
-            if result.returncode != 0:
-                log.warning("claude CLI failed (rc=%d) model=%s", result.returncode, model)
-                continue
-            answer = result.stdout.strip()
-            if answer:
-                log.info("LLM answer (%d chars) model=%s", len(answer), model)
-                return answer
-        except subprocess.TimeoutExpired:
-            log.warning("LLM timeout model=%s", model)
-        except Exception as exc:
-            log.warning("LLM error model=%s: %s", model, exc)
-
-    return "Не удалось получить ответ. Попробуй через пару минут."
+    from llm import chat as llm_chat
+    try:
+        log.info("LLM Q&A question='%s'", question[:80])
+        answer = llm_chat(prompt, tier="smart", timeout=LLM_TIMEOUT, temperature=0.3)
+        log.info("LLM answer (%d chars)", len(answer))
+        return answer
+    except Exception as exc:
+        log.warning("LLM Q&A failed: %s", exc)
+        return "Не удалось получить ответ. Попробуй через пару минут."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1257,17 +1241,11 @@ def _process_eat(chat_id: str, owner_id: str, food_text: str) -> None:
 ПРИЁМ ПИЩИ: {food_text}"""
 
     try:
-        import subprocess
-        result = subprocess.run(
-            ["claude", "-p", "--model", "claude-sonnet-4-6", prompt],
-            capture_output=True, text=True, timeout=90,
-        )
-        if result.returncode != 0:
-            send_message(chat_id, "Ошибка анализа. Попробуй описать подробнее.")
-            return
+        from llm import chat as llm_chat
+        raw_answer = llm_chat(prompt, tier="fast", timeout=90, temperature=0.0)
 
         import re as _re2
-        m = _re2.search(r"\{.*\}", result.stdout, _re2.DOTALL)
+        m = _re2.search(r"\{.*\}", raw_answer, _re2.DOTALL)
         if not m:
             send_message(chat_id, "Не удалось разобрать ответ. Попробуй ещё раз.")
             return
