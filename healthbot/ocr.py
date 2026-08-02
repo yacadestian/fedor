@@ -101,7 +101,7 @@ def ocr_backend() -> str:
     if forced in ("vision", "tesseract"):
         return forced
     try:
-        import llm
+        from . import llm
         if llm.provider() == "claude" and shutil.which("claude"):
             return "vision"
     except Exception:
@@ -376,7 +376,7 @@ def llm_cleanup_ocr(text: str) -> str:
     if os.getenv("OCR_CLEANUP", "1").strip().lower() in ("0", "no", "false", "off"):
         return text
     try:
-        import llm
+        from . import llm
         if not llm.available():
             return text
         cleaned = llm.chat(_CLEANUP_PROMPT + text[:12000], tier="fast",

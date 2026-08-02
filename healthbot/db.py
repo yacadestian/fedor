@@ -22,7 +22,8 @@ def ensure_schema() -> None:
     global _schema_ready
     if _schema_ready:
         return
-    schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
+    from .config import SCHEMA_PATH
+    schema_path = str(SCHEMA_PATH)
     try:
         ddl_client = clickhouse_connect.get_client(
             host=os.getenv("CH_HOST", "localhost"),
@@ -348,7 +349,7 @@ def query_spc_data(owner_id: str = "") -> dict[str, list]:
         f"  GROUP BY biomarker HAVING count() >= 2"
         f") ORDER BY biomarker, collected_at"
     )
-    from spc import SPCPoint
+    from .spc import SPCPoint
     series: dict[str, list] = {}
     for row in result.result_rows:
         bm = row[0]

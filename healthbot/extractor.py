@@ -6,7 +6,7 @@ import logging
 import re
 from datetime import date
 
-from llm import chat as llm_chat
+from .llm import chat as llm_chat
 
 log = logging.getLogger("health-bot")
 

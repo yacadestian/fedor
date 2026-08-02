@@ -8,6 +8,8 @@ Personal health analytics system via Telegram. Upload lab results (PDF, photo, t
 > - **LLM provider abstraction** (`llm.py`) — DeepSeek API (V4) or Claude CLI behind one interface with fast/smart tiers; DeepSeek V4 thinking mode is disabled for deterministic tasks (extraction, OCR cleanup) and enabled for Q&A
 > - **Robust OCR for low-quality photos** — OpenCV preprocessing (upscale, denoise, CLAHE, unsharp mask, deskew, adaptive binarization), quality assessment, multi-pass with per-candidate scoring (`image_ocr.py`). Backend is picked automatically: Claude Vision when the Claude CLI is available, **local Tesseract + LLM post-correction** on DeepSeek (its API is text-only)
 > - **Health diary** — timestamped wellbeing/symptom/note entries with structured scores, and **personal hypotheses** with lifecycle (active → confirmed/rejected); diary flows into the LLM context (`diary.py`)
+> - **Voice messages** — local faster-whisper transcription feeds the same diary/Q&A routing; audio never leaves your server (`voice.py`)
+> - **Yandex Disk sync** — every received document + its `.txt` mirror is backed up to Yandex Disk via WebDAV (`yadisk.py`)
 > - **Text mirroring** — every recognized PDF/photo is mirrored to a `.txt` file next to the source in `data/`
 > - **Auto-schema** — ClickHouse tables are created automatically on first run
 
@@ -168,9 +170,52 @@ clickhouse-client -q "GRANT ALL ON health_analytics.* TO health_bot"
 
 | File | Contents |
 |---|---|
-| `protocols.yaml` | 32 compounds: dosing, pharmacokinetics, monitoring |
-| `optimal_ranges.yaml` | 25+ biomarkers: optimal vs lab ranges, interactions |
-| `nutrient_antagonists.yaml` | Mineral antagonisms, drug depletions, GI effects |
+| `knowledge/protocols.yaml` | 32 compounds: dosing, pharmacokinetics, monitoring |
+| `knowledge/optimal_ranges.yaml` | 25+ biomarkers: optimal vs lab ranges, interactions |
+| `knowledge/nutrient_antagonists.yaml` | Mineral antagonisms, drug depletions, GI effects |
+
+## Project Layout
+
+```
+├── tg_listener.py          # entry point: bot (long polling)
+├── diagnostician.py        # entry point: cron digest/profile
+├── healthbot/              # main package
+│   ├── config.py           # paths, env, constants
+│   ├── bot.py              # Telegram listener, routing, commands
+│   ├── llm.py              # LLM provider abstraction (DeepSeek / Claude)
+│   ├── db.py               # ClickHouse interface (+ auto-schema)
+│   ├── extractor.py        # biomarker extraction / doc classification
+│   ├── pdf_parser.py       # PDF → text
+│   ├── ocr.py              # low-quality photo OCR (vision / tesseract)
+│   ├── voice.py            # voice messages → text (faster-whisper)
+│   ├── diary.py            # health diary & hypotheses
+│   ├── yadisk.py           # Yandex Disk sync (WebDAV)
+│   ├── nutrition.py        # meals, amino acids
+│   ├── charts.py / spc.py  # trend + SPC charts
+│   ├── report_pdf.py       # PDF report for the doctor
+│   ├── reminders.py        # medication reminders
+│   └── diagnostician.py    # L1 digest / L2 health profile
+├── knowledge/              # YAML knowledge bases
+├── tests/                  # offline tests (no CH/Telegram/LLM needed)
+├── data/                   # runtime: uploads + .txt mirrors (gitignored)
+├── schema.sql              # ClickHouse schema (auto-applied)
+└── assets/                 # README images
+```
+
+## Context input via Telegram (all channels)
+
+| You send | What happens |
+|---|---|
+| 📎 PDF | Text extracted → classified → biomarkers/documents → ClickHouse + `.txt` mirror + Yandex Disk |
+| 📸 Photo (any quality) | Preprocessing → OCR (vision or tesseract) → LLM cleanup → same pipeline |
+| 🎙 Voice message | Whisper transcription → diary/Q&A routing (needs `pip install faster-whisper`) |
+| 📝 Pasted text | Auto-detected as lab data / document / question |
+| `гипотеза:`, `самочувствие`, `дневник:` | Diary & hypothesis entries |
+
+## Yandex Disk sync
+
+Documents and their recognized `.txt` mirrors are uploaded to Yandex Disk over WebDAV.
+Setup: put `YANDEX_DISK_TOKEN` (OAuth) or `YANDEX_DISK_LOGIN` + `YANDEX_DISK_PASSWORD` (app password) into `.env`, optionally `YANDEX_DISK_DIR`. Sync failures never break the main flow — they're only logged.
 
 ## Data Privacy
 
