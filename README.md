@@ -4,12 +4,24 @@ Personal health analytics system via Telegram. Upload lab results (PDF, photo, t
 
 **Not a toy calorie counter.** A clinical-depth system that tracks amino acid profiles, drug-nutrient interactions, SPC control charts, and builds personalized health profiles.
 
+> **This fork adds** (on top of [petrovich-health](https://github.com/petrovich-opendev/petrovich-health)):
+> - **Robust OCR for low-quality photos** — OpenCV preprocessing (upscale, denoise, CLAHE, unsharp mask, deskew, adaptive binarization), quality assessment, multi-pass vision with per-candidate scoring, optional Tesseract cross-check (`image_ocr.py`)
+> - **Health diary** — timestamped wellbeing/symptom/note entries with structured scores, and **personal hypotheses** with lifecycle (active → confirmed/rejected); diary flows into the LLM context (`diary.py`)
+> - **Text mirroring** — every recognized PDF/photo is mirrored to a `.txt` file next to the source in `data/`
+> - **Auto-schema** — ClickHouse tables are created automatically on first run
+
 ## Features
 
 ### Data Input
 - **PDF** — auto-classifies (lab results / EEG / Holter / prescriptions / estimates), extracts biomarkers
-- **Photo** — OCR via Claude Vision, same pipeline as PDF  
+- **Photo** — OCR via Claude Vision, same pipeline as PDF. **Low-quality shots are handled**: quality assessment (blur / exposure / resolution) → OpenCV enhancement (denoise, CLAHE, sharpening, deskew, binarization) → multi-pass recognition with best-candidate scoring → optional Tesseract cross-check. The bot tells you when it had to enhance the image.
 - **Text** — paste lab results, auto-detected and parsed
+
+### Health Diary
+- **Timestamped entries** — `самочувствие 7/10 сон 6.5ч энергия 6 симптомы: ...` is parsed into structured scores
+- **Hypotheses** — `гипотеза: ...` is tracked and injected into the LLM context; the bot cross-checks it against new lab data and diary entries. Close the loop with `гипотеза подтвердилась` / `гипотеза опровергнута`
+- **Notes** — `дневник: ...` for free-form thoughts about your health
+- `/diary` shows recent entries, `/hypotheses` lists active ones
 
 ### Analysis
 - **Health Profile** — daily AI-generated cumulative profile (Opus), personalized to YOUR data
@@ -52,11 +64,11 @@ Diagnostician (cron)
   ├── 23:55 — L1: Compress day's chat → daily_digest (Haiku)
   └── 07:00 — L2: Full health profile → health_profile (Opus) → Telegram
   
-ClickHouse (10 tables)
+ClickHouse (11 tables)
   ├── lab_results, documents, upload_log
   ├── chat_log, daily_digest, health_profile
   ├── goals, nutrition_log, body_log
-  ├── clinical_lessons, reminders
+  ├── clinical_lessons, reminders, diary_entries
   └── All queries filtered by owner_id
 ```
 
@@ -82,7 +94,7 @@ python3 -m venv .venv
 cp .env.example .env
 # Edit .env: add your Telegram bot token, CH credentials
 
-# 4. Create ClickHouse schema
+# 4. Create ClickHouse schema (optional — created automatically on first run)
 clickhouse-client < schema.sql
 
 # 5. (Optional) Create dedicated CH user
@@ -116,8 +128,31 @@ clickhouse-client -q "GRANT ALL ON health_analytics.* TO health_bot"
 | `/correlations` | Cross-system analysis |
 | `/spc` | SPC control charts |
 | `/remind` | Medication reminders |
+| `/diary` | Health diary entries (`/diary 25` for more) |
+| `/hypotheses` | Active hypotheses (`/hypotheses все` — incl. closed) |
 | `/report` | PDF report for doctor |
 | `/summary` | AI health assessment |
+
+### Diary — no commands needed
+
+| You write | What happens |
+|---|---|
+| `самочувствие 7/10 сон 6.5ч энергия 6 симптомы: ...` | Structured wellbeing entry |
+| `симптом: тянет правый бок` | Symptom entry |
+| `гипотеза: ферритин падает из-за донорства` | Hypothesis, tracked & cross-checked |
+| `гипотеза подтвердилась: донорство` | Hypothesis marked confirmed |
+| `гипотеза опровергнута` | Latest hypothesis marked rejected |
+| `дневник: начал принимать магний` | Free-form note |
+
+## OCR quality knobs (.env)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OCR_VISION_MODEL` | `claude-sonnet-4-6` | Model for vision attempts |
+| `OCR_FINAL_MODEL` | = `OCR_VISION_MODEL` | Stronger model for the last attempt (e.g. `claude-opus-4-6`) |
+| `OCR_MAX_ATTEMPTS` | `3` | Max vision attempts across image variants |
+| `OCR_TIMEOUT` | `180` | Per-attempt timeout, seconds |
+| `OCR_TESSERACT` | `auto` | `1`/`0` force Tesseract cross-check; auto = on if `rus` language data installed |
 
 ## Knowledge Bases
 

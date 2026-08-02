@@ -323,6 +323,9 @@ def process_pdf(file_id: str, file_name: str, chat_id: str, owner_id: str = "") 
 
     log.info("Extracted %d chars from %d pages", len(raw_text), page_count)
 
+    # Mirror extracted text to a .txt file next to the PDF
+    local_path.with_suffix(".txt").write_text(raw_text, encoding="utf-8")
+
     # 3. Classify document FIRST (Haiku, cheap)
     send_typing(chat_id)
     classification = classify_document(raw_text)
@@ -595,13 +598,19 @@ def handle_command(text: str, owner_id: str = "") -> str | None:
             "/spc — SPC-анализ (контрольные карты биомаркеров)\n"
             "/correlations — корреляции по системам органов\n"
             "/remind — напоминания о приёме препаратов\n"
+            "/diary — дневник здоровья (последние записи)\n"
+            "/hypotheses — твои активные гипотезы\n"
             "/report — PDF-отчёт для врача\n"
             "/stats — статистика базы\n"
             "/summary — общая оценка здоровья (LLM)\n\n"
             "<b>Ввод данных:</b>\n"
             "📎 PDF файл — парсинг и сохранение\n"
-            "📸 Фото анализов — OCR распознавание\n"
+            "📸 Фото анализов — OCR распознавание (в т.ч. плохого качества)\n"
             "📝 Текст анализов — автораспознавание\n\n"
+            "<b>Дневник (просто напиши):</b>\n"
+            "<i>самочувствие 7/10 сон 6.5ч энергия 6 симптомы: ...</i>\n"
+            "<i>гипотеза: ферритин падает из-за ...</i>\n"
+            "<i>дневник: любые мысли о здоровье</i>\n\n"
             "Любой другой текст — вопрос о здоровье.\n\n"
             "💬 Нашёл баг или есть идея? /feedback твоё сообщение"
         )
@@ -766,6 +775,20 @@ def handle_command(text: str, owner_id: str = "") -> str | None:
 
     if cmd_name == "/week":
         return ("__week__", owner_id)
+
+    if cmd_name == "/diary":
+        from diary import parse_diary_command, format_diary_list
+        from db import query_diary_entries
+        opts = parse_diary_command(arg)
+        rows = query_diary_entries(owner_id, limit=opts["limit"], days=opts["days"])
+        return format_diary_list(rows)
+
+    if cmd_name == "/hypotheses":
+        from diary import format_hypotheses
+        from db import query_hypotheses
+        include_closed = arg.strip().lower() in ("все", "all")
+        rows = query_hypotheses(owner_id, status=None if include_closed else "active")
+        return format_hypotheses(rows)
 
     if cmd_name == "/spc":
         series = query_spc_data(owner_id)
@@ -1403,7 +1426,7 @@ def process_message(message: dict) -> None:
         send_message(chat_id, report)
         return
 
-    # Photo → OCR via Claude Vision
+    # Photo → robust OCR (preprocessing + multi-pass for low-quality shots)
     if message.get("photo"):
         photos = message["photo"]
         best = max(photos, key=lambda p: p.get("file_size", 0))
@@ -1418,30 +1441,31 @@ def process_message(message: dict) -> None:
             photo_path = DATA_DIR / f"{timestamp}_photo.jpg"
             download_photo(file_id, photo_path)
 
-            # Use Claude Vision to extract text
-            import base64
-            img_b64 = base64.b64encode(photo_path.read_bytes()).decode()
-            vision_prompt = (
-                "Извлеки весь текст с этого фото медицинского документа/анализа. "
-                "Сохрани структуру: названия показателей, значения, единицы, нормы. "
-                "Верни чистый текст как есть, без интерпретации."
-            )
-            # claude CLI with image
-            result = subprocess.run(
-                ["claude", "-p", "--model", "claude-sonnet-4-6",
-                 f"[image: data:image/jpeg;base64,{img_b64}] {vision_prompt}"],
-                capture_output=True, text=True, timeout=120,
-            )
-            if result.returncode != 0:
-                send_message(chat_id, f"Ошибка распознавания: {result.stderr[:200]}")
+            from image_ocr import ocr_image
+            try:
+                ocr = ocr_image(photo_path)
+            except Exception as exc:
+                send_message(chat_id, f"Ошибка распознавания: {exc}")
                 return
 
-            ocr_text = result.stdout.strip()
-            if not ocr_text or len(ocr_text) < 20:
-                send_message(chat_id, "Не удалось распознать текст на фото. Попробуй с лучшим освещением или отправь PDF.")
+            ocr_text = ocr.text
+            if not ocr.ok:
+                send_message(chat_id,
+                             "Не удалось распознать текст на фото. "
+                             "Попробуй с лучшим освещением, ровнее и ближе — или отправь PDF.")
                 return
 
-            log.info("OCR extracted %d chars from photo", len(ocr_text))
+            log.info("OCR extracted %d chars from photo (variant=%s score=%.2f attempts=%d)",
+                     len(ocr_text), ocr.variant, ocr.score, ocr.attempts)
+
+            # Mirror recognized text to a .txt file next to the photo
+            txt_path = photo_path.with_suffix(".txt")
+            txt_path.write_text(ocr_text, encoding="utf-8")
+
+            quality_note = ocr.user_note
+            if quality_note:
+                send_message(chat_id, quality_note)
+                send_typing(chat_id)
 
             # Process as text input
             from extractor import classify_document, extract_biomarkers, validate_results
@@ -1460,11 +1484,15 @@ def process_message(message: dict) -> None:
                         row["raw_text"] = ocr_text[:10000]
                     count = insert_lab_results(valid_rows, owner_id)
                     insert_upload_log(source_name, best.get("file_size", 0), 1, count,
-                                      lab_name, collected_at, "ok", "", ocr_text[:10000], owner_id=owner_id)
+                                      lab_name, collected_at, "ok",
+                                      f"ocr_variant={ocr.variant} ocr_score={ocr.score}",
+                                      ocr_text[:10000], owner_id=owner_id)
                     abnormal = [r for r in valid_rows
                                 if (r.get("ref_low") is not None and r["value"] < r["ref_low"])
                                 or (r.get("ref_high") is not None and r["value"] > r["ref_high"])]
                     report = f"<b>Фото обработано</b>\nЛаборатория: {lab_name}\nДата: {collected_at}\nПоказателей: <b>{count}</b>"
+                    if ocr.quality.poor:
+                        report += f"\nРаспознавание: {ocr.variant} (уверенность {ocr.score:.0%})"
                     if abnormal:
                         report += f"\n\n<b>Вне нормы ({len(abnormal)}):</b>"
                         for r in abnormal:
@@ -1563,6 +1591,35 @@ def process_message(message: dict) -> None:
             return
         send_message(chat_id, cmd_response)
         return
+
+    # Diary entries & hypotheses (natural prefixes, no command needed)
+    from diary import detect_diary_message, format_entry_saved
+    diary_msg = detect_diary_message(text)
+    if diary_msg:
+        if diary_msg["kind"] == "entry":
+            from db import insert_diary_entry
+            insert_diary_entry(diary_msg["entry"], owner_id)
+            log.info("Diary entry saved: type=%s (%d chars)",
+                     diary_msg["entry"]["entry_type"], len(diary_msg["entry"]["text"]))
+            send_message(chat_id, format_entry_saved(diary_msg["entry"]))
+            return
+        if diary_msg["kind"] == "status":
+            from db import find_latest_active_hypothesis, set_hypothesis_status
+            from diary import _STATUS_LABELS
+            hypo = find_latest_active_hypothesis(owner_id, diary_msg["match"])
+            if not hypo:
+                send_message(chat_id,
+                             "Активная гипотеза не найдена"
+                             + (f" по фрагменту «{diary_msg['match'][:80]}»." if diary_msg["match"] else ".")
+                             + "\n/hypotheses — список активных.")
+                return
+            updated = set_hypothesis_status(owner_id, str(hypo["id"]), diary_msg["status"])
+            if updated:
+                label = _STATUS_LABELS.get(diary_msg["status"], diary_msg["status"])
+                send_message(chat_id, f"🔬 Гипотеза обновлена: {label}\n<i>{updated['text'][:250]}</i>")
+            else:
+                send_message(chat_id, "Не удалось обновить гипотезу. /hypotheses — список.")
+            return
 
     # Check if text looks like pasted lab results
     if looks_like_medical_data(text):
