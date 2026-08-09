@@ -223,6 +223,27 @@ clickhouse-client -q "GRANT ALL ON health_analytics.* TO health_bot"
 Documents and their recognized `.txt` mirrors are uploaded to Yandex Disk over WebDAV.
 Setup: put `YANDEX_DISK_TOKEN` (OAuth) or `YANDEX_DISK_LOGIN` + `YANDEX_DISK_PASSWORD` (app password) into `.env`, optionally `YANDEX_DISK_DIR`. Sync failures never break the main flow — they're only logged.
 
+## Bulk history import (Yandex Disk + mail)
+
+Collects your whole medical history in one pass:
+
+1. **Yandex Disk**: recursively walks a folder you point at (`--yadisk-dir`), downloads every PDF/image/txt
+2. **Mail**: scans INBOX + chosen folders (default `Чеки`) over the last N years via IMAP, downloads only PDF attachments (headers + structure first — cheap even on huge mailboxes)
+3. **Filter**: every document is classified by the fast LLM tier — only medical ones (analyses, consultations, МРТ/УЗИ/ЭЭГ, prescriptions, discharges) are kept; store receipts, tickets, bank statements are skipped (logged in the manifest)
+4. **Scanned PDFs** are rendered page-by-page and read through the vision API
+5. **Output bundle**: `raw/` (originals), `text/` (extracted text), `consolidated.md` (everything in one document, sorted by date, grouped by year), `manifest.json` (per-file verdicts)
+
+```bash
+# Collect (any machine; credentials in .env: YANDEX_DISK_*, MAIL_*)
+.venv/bin/python import_history.py --yadisk-dir "/Здоровье" --mail --out data/history_bundle
+
+# Trial run on a few letters first:
+.venv/bin/python import_history.py --mail --mail-limit 20
+
+# Load the bundle into the bot's ClickHouse (run on the bot's server):
+.venv/bin/python import_history.py --from-bundle data/history_bundle --to-db --owner <your_chat_id>
+```
+
 ## Data Privacy
 
 - All data stored locally in your ClickHouse instance
