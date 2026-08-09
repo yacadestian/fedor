@@ -98,6 +98,34 @@ def match_folders(all_folders: list[str], wanted: list[str]) -> list[str]:
     return result
 
 
+def _fetch_bodystructures(mail: imaplib.IMAP4_SSL,
+                          msg_ids: list[bytes]) -> dict[bytes, str]:
+    """One FETCH BODYSTRUCTURE roundtrip for a chunk of messages.
+    Returns {msg_id: structure_text}; unparsable entries are skipped."""
+    set_str = b",".join(msg_ids).decode()
+    try:
+        status, data = mail.fetch(set_str, "(BODYSTRUCTURE)")
+    except Exception as exc:
+        log.warning("Batch BODYSTRUCTURE failed: %s", exc)
+        return {}
+    if status != "OK":
+        return {}
+    out: dict[bytes, str] = {}
+    for item in data:
+        if isinstance(item, tuple):
+            text = "".join(
+                part.decode("utf-8", errors="replace") if isinstance(part, bytes) else str(part)
+                for part in item if part)
+        elif isinstance(item, bytes):
+            text = item.decode("utf-8", errors="replace")
+        else:
+            continue
+        m = re.match(r"(\d+)\s+\(BODYSTRUCTURE\s*(.*)", text, re.DOTALL | re.IGNORECASE)
+        if m:
+            out[m.group(1).encode()] = m.group(2)
+    return out
+
+
 def _list_folders(mail: imaplib.IMAP4_SSL) -> list[str]:
     status, data = mail.list()
     if status != "OK":
@@ -115,12 +143,15 @@ def _list_folders(mail: imaplib.IMAP4_SSL) -> list[str]:
 
 
 def _message_has_pdf(structure: str) -> list[int]:
-    """Parse FETCH BODYSTRUCTURE response text → part numbers of PDF parts."""
+    """Parse FETCH BODYSTRUCTURE response text → part numbers of PDF parts.
+
+    Matches both "application/pdf" parts and application/octet-stream parts
+    whose filename (possibly RFC2047-encoded, e.g. =?utf-8?q?...=2Epdf?=)
+    ends with .pdf.
+    """
     parts: list[int] = []
-    # Flatten: find ("application" "pdf") or ("name" "*.pdf") part bodies
     depth = 0
     part_no = 0
-    token = ""
     i = 0
     body_start = None
     while i < len(structure):
@@ -133,8 +164,10 @@ def _message_has_pdf(structure: str) -> list[int]:
         elif ch == ")":
             depth -= 1
             if depth == 1 and body_start is not None:
-                seg = structure[body_start:i].lower()
-                if '"application" "pdf"' in seg or '.pdf"' in seg:
+                seg = structure[body_start:i]
+                seg_l = seg.lower()
+                if ('"application" "pdf"' in seg_l or '.pdf"' in seg_l
+                        or ".pdf" in decode_mime_header(seg).lower()):
                     parts.append(part_no)
                 body_start = None
         i += 1
@@ -171,67 +204,75 @@ def scan_mail(years: int | None = None, folders: list[str] | None = None,
             msg_ids = data[0].split()
             log.info("Folder %s: %d messages since %s", folder, len(msg_ids), since)
 
-            for num in msg_ids:
+            # Batch BODYSTRUCTURE fetches: one roundtrip per 200 messages
+            # instead of per message — 100x faster on big mailboxes
+            batch = int(os.getenv("MAIL_BATCH", "200"))
+            for chunk_start in range(0, len(msg_ids), batch):
                 if limit and len(attachments) >= limit:
                     break
-                # BODYSTRUCTURE tells us about attachments without downloading
-                status, sdata = mail.fetch(num, "(BODYSTRUCTURE)")
-                if status != "OK" or not sdata or not sdata[0]:
-                    continue
-                struct_text = sdata[0].decode("utf-8", errors="replace") \
-                    if isinstance(sdata[0], bytes) else str(sdata[0])
-                if "pdf" not in struct_text.lower():
-                    continue
-                pdf_parts = _message_has_pdf(struct_text)
-                if not pdf_parts:
-                    continue
-
-                # Headers for metadata
-                status, hdata = mail.fetch(
-                    num, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
-                header_text = ""
-                if status == "OK" and hdata and isinstance(hdata[0], tuple):
-                    header_text = hdata[0][1].decode("utf-8", errors="replace")
-                subject = decode_mime_header(
-                    re.search(r"Subject:\s*(.+?)(?:\r?\n\S|$)", header_text, re.S | re.I)
-                    .group(1).strip() if re.search(r"Subject:", header_text, re.I) else "")
-                sender = decode_mime_header(
-                    re.search(r"From:\s*(.+?)(?:\r?\n|$)", header_text, re.I)
-                    .group(1).strip() if re.search(r"From:", header_text, re.I) else "")
-                msg_date = (re.search(r"Date:\s*(.+?)(?:\r?\n|$)", header_text, re.I)
-                            .group(1).strip() if re.search(r"Date:", header_text, re.I) else "")
-
-                for part_no in pdf_parts:
-                    status, pdata = mail.fetch(num, f"(BODY.PEEK[{part_no}])")
-                    if status != "OK" or not pdata or not isinstance(pdata[0], tuple):
+                chunk = msg_ids[chunk_start:chunk_start + batch]
+                struct_map = _fetch_bodystructures(mail, chunk)
+                candidates = []
+                for num in chunk:
+                    struct_text = struct_map.get(num, "")
+                    if "pdf" not in struct_text.lower():
                         continue
-                    raw = pdata[0][1] or b""
-                    # Attachment bodies are base64/qp encoded per Content-Transfer-Encoding
-                    import base64
-                    try:
-                        blob = base64.b64decode(raw, validate=True)
-                    except Exception:
-                        blob = raw
-                    if not blob.startswith(b"%PDF"):
-                        # Some servers return the raw encoded part; try forgiving decode
+                    pdf_parts = _message_has_pdf(struct_text)
+                    if pdf_parts:
+                        candidates.append((num, pdf_parts))
+                log.info("  %s: scanned %d/%d, %d with PDF so far",
+                         folder, min(chunk_start + batch, len(msg_ids)),
+                         len(msg_ids), len(candidates))
+
+                for num, pdf_parts in candidates:
+                    if limit and len(attachments) >= limit:
+                        break
+                    # Headers for metadata
+                    status, hdata = mail.fetch(
+                        num, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
+                    header_text = ""
+                    if status == "OK" and hdata and isinstance(hdata[0], tuple):
+                        header_text = hdata[0][1].decode("utf-8", errors="replace")
+                    subject = decode_mime_header(
+                        re.search(r"Subject:\s*(.+?)(?:\r?\n\S|$)", header_text, re.S | re.I)
+                        .group(1).strip() if re.search(r"Subject:", header_text, re.I) else "")
+                    sender = decode_mime_header(
+                        re.search(r"From:\s*(.+?)(?:\r?\n|$)", header_text, re.I)
+                        .group(1).strip() if re.search(r"From:", header_text, re.I) else "")
+                    msg_date = (re.search(r"Date:\s*(.+?)(?:\r?\n|$)", header_text, re.I)
+                                .group(1).strip() if re.search(r"Date:", header_text, re.I) else "")
+
+                    for part_no in pdf_parts:
+                        status, pdata = mail.fetch(num, f"(BODY.PEEK[{part_no}])")
+                        if status != "OK" or not pdata or not isinstance(pdata[0], tuple):
+                            continue
+                        raw = pdata[0][1] or b""
+                        # Attachment bodies are base64/qp encoded per Content-Transfer-Encoding
+                        import base64
                         try:
-                            blob = base64.b64decode(raw + b"=" * (-len(raw) % 4))
+                            blob = base64.b64decode(raw, validate=True)
                         except Exception:
-                            continue
+                            blob = raw
                         if not blob.startswith(b"%PDF"):
+                            # Some servers return the raw encoded part; try forgiving decode
+                            try:
+                                blob = base64.b64decode(raw + b"=" * (-len(raw) % 4))
+                            except Exception:
+                                continue
+                            if not blob.startswith(b"%PDF"):
+                                continue
+                        import hashlib
+                        digest = hashlib.sha256(blob).hexdigest()
+                        if digest in seen_hashes:
                             continue
-                    import hashlib
-                    digest = hashlib.sha256(blob).hexdigest()
-                    if digest in seen_hashes:
-                        continue
-                    seen_hashes.add(digest)
-                    attachments.append(MailAttachment(
-                        folder=decode_mutf7(folder), msg_date=msg_date,
-                        subject=subject, sender=sender,
-                        filename=f"mail_{num.decode()}_{part_no}.pdf",
-                        data=blob,
-                    ))
-                    progress(f"PDF: {subject[:60]} | {msg_date[:20]} | {len(blob)//1024} KB")
+                        seen_hashes.add(digest)
+                        attachments.append(MailAttachment(
+                            folder=decode_mutf7(folder), msg_date=msg_date,
+                            subject=subject, sender=sender,
+                            filename=f"mail_{num.decode()}_{part_no}.pdf",
+                            data=blob,
+                        ))
+                        progress(f"PDF: {subject[:60]} | {msg_date[:20]} | {len(blob)//1024} KB")
     finally:
         try:
             mail.logout()
