@@ -88,3 +88,77 @@ def sync_document(local_path: str | Path, txt_mirror: str | Path | None = None,
             upload(path, remote_subdir)
         except Exception as exc:
             log.warning("Yandex Disk sync failed for %s: %s", path, exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reading: recursive listing + download (for history import)
+# ─────────────────────────────────────────────────────────────────────────────
+def _propfind(remote_dir: str) -> list[tuple[str, int, bool]]:
+    """PROPFIND Depth:1 → list of (path, size_bytes, is_dir) for children."""
+    auth = _auth()
+    if auth is None:
+        raise RuntimeError("Yandex Disk не настроен: задай YANDEX_DISK_TOKEN "
+                           "или YANDEX_DISK_LOGIN + YANDEX_DISK_PASSWORD в .env")
+    body = ('<?xml version="1.0" encoding="utf-8"?>'
+            '<d:propfind xmlns:d="DAV:"><d:prop>'
+            '<d:resourcetype/><d:getcontentlength/></d:prop></d:propfind>')
+    resp = requests.request(
+        "PROPFIND", WEBDAV_URL + remote_dir, data=body,
+        headers={"Depth": "1", "Content-Type": "application/xml",
+                 **auth.get("headers", {})},
+        auth=auth.get("auth"), timeout=_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return parse_propfind(resp.text, remote_dir)
+
+
+def parse_propfind(xml_text: str, remote_dir: str) -> list[tuple[str, int, bool]]:
+    """Parse a WebDAV multistatus response into (path, size, is_dir) tuples."""
+    import xml.etree.ElementTree as ET
+    entries: list[tuple[str, int, bool]] = []
+    root = ET.fromstring(xml_text)
+    for response in root.iter("{DAV:}response"):
+        href = response.findtext("{DAV:}href", "")
+        # href may be URL-encoded
+        from urllib.parse import unquote
+        path = unquote(href)
+        is_dir = response.find(".//{DAV:}resourcetype/{DAV:}collection") is not None
+        size_text = response.findtext(".//{DAV:}getcontentlength") or "0"
+        try:
+            size = int(size_text)
+        except ValueError:
+            size = 0
+        # Skip the queried directory itself
+        if path.rstrip("/") != remote_dir.rstrip("/"):
+            entries.append((path, size, is_dir))
+    return entries
+
+
+def list_files(remote_dir: str) -> list[tuple[str, int]]:
+    """Recursively list all files under remote_dir → [(path, size_bytes)]."""
+    out: list[tuple[str, int]] = []
+    stack = [remote_dir.rstrip("/")]
+    while stack:
+        current = stack.pop()
+        for path, size, is_dir in _propfind(current):
+            if is_dir:
+                stack.append(path)
+            else:
+                out.append((path, size))
+    return sorted(out)
+
+
+def download(remote_path: str, dest: str | Path) -> Path:
+    """Download a remote file to a local path."""
+    auth = _auth()
+    if auth is None:
+        raise RuntimeError("Yandex Disk не настроен (см. .env)")
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    resp = requests.get(WEBDAV_URL + remote_path, timeout=120,
+                        stream=True, **auth)
+    resp.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=1 << 16):
+            f.write(chunk)
+    return dest
