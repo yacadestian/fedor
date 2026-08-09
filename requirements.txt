@@ -8,5 +8,6 @@ reportlab>=4.0
 opencv-python-headless>=4.8
 numpy>=1.26
 Pillow>=10.0
+PyMuPDF>=1.24
 # Voice messages (optional, ~250MB + model download; bot works without it):
 # faster-whisper>=1.1

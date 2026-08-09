@@ -303,12 +303,20 @@ def process_pdf(file_id: str, file_name: str, chat_id: str, owner_id: str = "") 
         return f"Ошибка чтения PDF: {exc}"
 
     if not raw_text.strip():
-        insert_upload_log(safe_name, file_size, page_count, 0, "", date.today(), "error",
-                          "Empty text after extraction", owner_id=owner_id)
-        return (
-            "PDF не содержит извлекаемого текста. "
-            "Возможно это скан — попробуй сделать фото анализов и отправить как изображение."
-        )
+        # Scanned PDF — render pages and read them through the vision API
+        send_message(chat_id, "Это скан без текстового слоя — читаю страницы через vision OCR...")
+        try:
+            from .ingest import scanned_pdf_to_text
+            raw_text = scanned_pdf_to_text(local_path)
+        except Exception as exc:
+            log.error("Scanned PDF OCR failed: %s", exc)
+            insert_upload_log(safe_name, file_size, page_count, 0, "", date.today(), "error",
+                              f"Scanned PDF OCR: {exc}", owner_id=owner_id)
+            return f"Не удалось распознать скан: {exc}"
+        if not raw_text.strip():
+            insert_upload_log(safe_name, file_size, page_count, 0, "", date.today(), "error",
+                              "Empty text after OCR", owner_id=owner_id)
+            return "Не удалось извлечь текст даже через OCR. Отправь фото страниц хорошего качества."
 
     log.info("Extracted %d chars from %d pages", len(raw_text), page_count)
 
