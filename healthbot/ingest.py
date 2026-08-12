@@ -70,8 +70,9 @@ def pdf_to_text(pdf_path: Path, max_pages_ocr: int = 10) -> str:
 
 def scanned_pdf_to_text(pdf_path: Path, max_pages: int = 10) -> str:
     """Render a scanned PDF page-by-page and OCR each page via vision API."""
+    import time
     import fitz  # pymupdf
-    from .ocr import _vision_api_read, VISION_API_MODEL
+    from .ocr import _vision_api_read, VISION_API_MODEL_FAST
 
     texts: list[str] = []
     with fitz.open(pdf_path) as doc:
@@ -79,16 +80,18 @@ def scanned_pdf_to_text(pdf_path: Path, max_pages: int = 10) -> str:
             if i >= max_pages:
                 log.info("Scanned PDF truncated at %d pages: %s", max_pages, pdf_path.name)
                 break
-            pix = page.get_pixmap(dpi=200)
+            pix = page.get_pixmap(dpi=180)
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 pix.save(tmp.name)
                 tmp_path = Path(tmp.name)
             try:
-                page_text = _vision_api_read(tmp_path, VISION_API_MODEL)
+                # Prefer flash-lite: same quality for lab scans, much higher free quota
+                page_text = _vision_api_read(tmp_path, VISION_API_MODEL_FAST)
             finally:
                 tmp_path.unlink(missing_ok=True)
             if page_text:
                 texts.append(page_text)
+            time.sleep(2.0)  # stay under Gemini free-tier RPM
     return "\n\n".join(texts)
 
 
@@ -122,10 +125,11 @@ def process_file(filename: str, data: bytes, source: str, source_ref: str,
             tmp_pdf.write_bytes(data)
             text = pdf_to_text(tmp_pdf)
         elif suffix in (".jpg", ".jpeg", ".png", ".webp"):
-            from .ocr import _vision_api_read, VISION_API_MODEL
+            from .ocr import _vision_api_read, VISION_API_MODEL_FAST
             tmp_img = work_dir / f"{digest[:16]}{suffix}"
             tmp_img.write_bytes(data)
-            text = _vision_api_read(tmp_img, VISION_API_MODEL)
+            # API-only OCR via Gemini flash-lite (no local Tesseract)
+            text = _vision_api_read(tmp_img, VISION_API_MODEL_FAST)
         elif suffix == ".txt":
             text = data.decode("utf-8", errors="replace")
         else:

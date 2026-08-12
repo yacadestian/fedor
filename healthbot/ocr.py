@@ -110,7 +110,9 @@ VISION_API_BASE = os.getenv(
     "OCR_VISION_API_BASE",
     "https://generativelanguage.googleapis.com/v1beta/openai").rstrip("/")
 VISION_API_KEY = os.getenv("OCR_VISION_API_KEY", "").strip()
-VISION_API_MODEL = os.getenv("OCR_VISION_API_MODEL", "gemini-2.5-flash")
+# Default both to flash-lite: free-tier quota on gemini-2.5-flash is easily
+# exhausted; lite is enough for lab scans / photos. Override via env if needed.
+VISION_API_MODEL = os.getenv("OCR_VISION_API_MODEL", "gemini-2.5-flash-lite")
 VISION_API_MODEL_FAST = os.getenv("OCR_VISION_API_MODEL_FAST", "gemini-2.5-flash-lite")
 
 

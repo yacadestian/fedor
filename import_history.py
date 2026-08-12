@@ -105,7 +105,7 @@ def main() -> int:
                 ingest.save_manifest(records, work_dir)  # crash-safe progress
                 # Soft throttle to stay under Gemini free-tier rate limits
                 import time
-                time.sleep(1.5)
+                time.sleep(4.0)
 
         if args.mail:
             log.info("=== Mail scan ===")
