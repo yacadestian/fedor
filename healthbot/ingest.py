@@ -63,9 +63,13 @@ def pdf_to_text(pdf_path: Path, max_pages_ocr: int = 10) -> str:
     """pdfplumber for text PDFs; scanned pages rendered through the vision API."""
     from .pdf_parser import extract_text
     text, _pages = extract_text(pdf_path)
-    if text.strip():
+    # Tiny embedded text layers (scanner junk) still need vision OCR
+    if len(text.strip()) >= 80:
         return text
-    return scanned_pdf_to_text(pdf_path, max_pages_ocr)
+    ocr_text = scanned_pdf_to_text(pdf_path, max_pages_ocr)
+    if len(ocr_text.strip()) > len(text.strip()):
+        return ocr_text
+    return text or ocr_text
 
 
 def scanned_pdf_to_text(pdf_path: Path, max_pages: int = 10) -> str:
