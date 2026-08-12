@@ -17,7 +17,7 @@ Personal health analytics system via Telegram. Upload lab results (PDF, photo, t
 
 ### Data Input
 - **PDF** — auto-classifies (lab results / EEG / Holter / prescriptions / estimates), extracts biomarkers
-- **Photo** — OCR via Claude Vision, same pipeline as PDF. **Low-quality shots are handled**: quality assessment (blur / exposure / resolution) → OpenCV enhancement (denoise, CLAHE, sharpening, deskew, binarization) → multi-pass recognition with best-candidate scoring → optional Tesseract cross-check. The bot tells you when it had to enhance the image.
+- **Photo** — OCR via vision API (Gemini / OpenRouter / Claude Vision), same pipeline as PDF. **Low-quality shots are handled**: quality assessment (blur / exposure / resolution) → OpenCV enhancement (denoise, CLAHE, sharpening, deskew, binarization) → multi-pass recognition with best-candidate scoring. Local OCR (Tesseract) is not used.
 - **Text** — paste lab results, auto-detected and parsed
 
 ### Health Diary
@@ -165,13 +165,11 @@ clickhouse-client -q "GRANT ALL ON health_analytics.* TO health_bot"
 | `OCR_VISION_API_KEY` | — | Key for the vision provider |
 | `OCR_VISION_API_MODEL_FAST` | `gemini-2.5-flash-lite` | First attempt on the original photo (cheap) |
 | `OCR_VISION_API_MODEL` | `gemini-2.5-flash` | Retries on preprocessed variants (quality) |
-| `OCR_BACKEND` | `auto` | `vision_api` / `vision` (Claude) / `tesseract` (legacy, opt-in) |
+| `OCR_BACKEND` | `auto` | `vision_api` / `vision` (Claude). Local Tesseract is rejected. |
 | `OCR_CLEANUP` | `1` | LLM post-correction of OCR text (fixes typical OCR letter/digit confusions) |
 | `OCR_VISION_MODEL` | `claude-sonnet-4-6` | Model for Claude CLI vision attempts |
 | `OCR_MAX_ATTEMPTS` | `3` | Max attempts across image variants |
 | `OCR_TIMEOUT` | `180` | Per-attempt timeout, seconds |
-| `OCR_TESSERACT` | off | `1` forces legacy Tesseract backend (not recommended) |
-
 ## Knowledge Bases
 
 | File | Contents |
@@ -192,7 +190,7 @@ clickhouse-client -q "GRANT ALL ON health_analytics.* TO health_bot"
 │   ├── db.py               # ClickHouse interface (+ auto-schema)
 │   ├── extractor.py        # biomarker extraction / doc classification
 │   ├── pdf_parser.py       # PDF → text
-│   ├── ocr.py              # low-quality photo OCR (vision / tesseract)
+│   ├── ocr.py              # low-quality photo OCR (vision API only)
 │   ├── voice.py            # voice messages → text (faster-whisper)
 │   ├── diary.py            # health diary & hypotheses
 │   ├── yadisk.py           # Yandex Disk sync (WebDAV)
@@ -213,7 +211,7 @@ clickhouse-client -q "GRANT ALL ON health_analytics.* TO health_bot"
 | You send | What happens |
 |---|---|
 | 📎 PDF | Text extracted → classified → biomarkers/documents → ClickHouse + `.txt` mirror + Yandex Disk |
-| 📸 Photo (any quality) | Preprocessing → OCR (vision or tesseract) → LLM cleanup → same pipeline |
+| 📸 Photo (any quality) | Preprocessing → OCR (vision API) → LLM cleanup → same pipeline |
 | 🎙 Voice message | Whisper transcription → diary/Q&A routing (needs `pip install faster-whisper`) |
 | 📝 Pasted text | Auto-detected as lab data / document / question |
 | `гипотеза:`, `самочувствие`, `дневник:` | Diary & hypothesis entries |

@@ -178,57 +178,6 @@ class TestOcrScoring:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tesseract recovery on a realistic bad photo (skipped without tesseract+rus)
-# ─────────────────────────────────────────────────────────────────────────────
-def _tesseract_ready() -> bool:
-    import shutil
-    import subprocess
-    exe = shutil.which("tesseract")
-    if not exe:
-        return False
-    try:
-        langs = subprocess.run([exe, "--list-langs"], capture_output=True,
-                               text=True, timeout=10).stdout
-        return "rus" in langs
-    except Exception:
-        return False
-
-
-class TestTesseractRecovery:
-    @pytest.mark.skipif(not _tesseract_ready(), reason="tesseract with rus not installed")
-    def test_preprocessing_recovers_text(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("OCR_BACKEND", "tesseract")
-        monkeypatch.setenv("OCR_TESSERACT", "1")
-        monkeypatch.setenv("OCR_CLEANUP", "0")  # no LLM in offline tests
-        src = tmp_path / "photo.jpg"
-        cv2.imwrite(str(src), degrade_realistic(render_lab_image()))
-
-        result = image_ocr.ocr_image(src)
-        text = result.text
-        recovered = sum(1 for kw in ["Гемоглобин", "Эритроциты", "Лейкоциты",
-                                     "Тромбоциты", "Глюкоза", "Креатинин",
-                                     "АЛТ", "Ферритин"] if kw.lower() in text.lower())
-        # Raw Tesseract floor (no LLM cleanup in offline mode); production
-        # quality bar is higher thanks to the LLM post-correction pass.
-        assert recovered >= 4, f"recovered {recovered}/8 biomarker names\n{text}"
-        assert result.ok, f"score {result.score}, scores {result.scores}"
-
-    @pytest.mark.skipif(not _tesseract_ready(), reason="tesseract with rus not installed")
-    def test_preprocessed_beats_raw_original(self, tmp_path):
-        src = tmp_path / "photo.jpg"
-        degraded = degrade_realistic(render_lab_image())
-        cv2.imwrite(str(src), degraded)
-        info = image_ocr.assess_quality(cv2.imread(str(src)))
-        variants = image_ocr.build_variants(src, tmp_path, info)
-        score_raw = image_ocr.ocr_quality_score(image_ocr._tesseract_ocr(variants[0].path))
-        best = max(
-            (image_ocr.ocr_quality_score(image_ocr._tesseract_ocr(v.path)) for v in variants[1:]),
-            default=0.0,
-        )
-        assert best > score_raw, f"preprocessing should help: raw={score_raw} best={best}"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Vision API client (mocked OpenAI-compatible endpoint)
 # ─────────────────────────────────────────────────────────────────────────────
 class TestVisionApiClient:
@@ -286,14 +235,14 @@ class TestVisionApiClient:
         monkeypatch.delenv("OCR_BACKEND", raising=False)
         monkeypatch.setattr(image_ocr, "VISION_API_KEY", "k")
         assert image_ocr.ocr_backend() == "vision_api"
-        # Tesseract is opt-in only (OCR_BACKEND=tesseract AND OCR_TESSERACT=1)
+        # Local Tesseract is permanently rejected
         monkeypatch.setattr(image_ocr, "VISION_API_KEY", "")
         monkeypatch.setenv("OCR_BACKEND", "tesseract")
-        monkeypatch.delenv("OCR_TESSERACT", raising=False)
         with pytest.raises(RuntimeError, match="локальный OCR запрещён"):
             image_ocr.ocr_backend()
         monkeypatch.setenv("OCR_TESSERACT", "1")
-        assert image_ocr.ocr_backend() == "tesseract"
+        with pytest.raises(RuntimeError, match="локальный OCR запрещён"):
+            image_ocr.ocr_backend()
 
     def test_error_body_raises(self, tmp_path, monkeypatch):
         from http.server import BaseHTTPRequestHandler, HTTPServer

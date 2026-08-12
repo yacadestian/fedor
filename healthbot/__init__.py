@@ -7,7 +7,7 @@ Layout:
     db.py           ClickHouse interface
     extractor.py    LLM biomarker extraction / document classification
     pdf_parser.py   PDF text extraction
-    ocr.py          robust OCR for low-quality photos (vision or tesseract)
+    ocr.py          robust OCR for low-quality photos (vision API only)
     voice.py        voice message transcription (faster-whisper, optional)
     diary.py        health diary & hypotheses
     yadisk.py       Yandex Disk sync (WebDAV)

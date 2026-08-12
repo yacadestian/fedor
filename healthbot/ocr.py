@@ -2,16 +2,19 @@
 
 Pipeline: quality assessment → OpenCV preprocessing variants (upscale,
 denoise, CLAHE contrast, unsharp mask, deskew, adaptive binarization) →
-multi-pass Claude Vision with per-candidate quality scoring → optional
-Tesseract cross-check. The best-scoring transcription wins.
+multi-pass vision API / Claude Vision with per-candidate quality scoring.
+The best-scoring transcription wins.
+
+Local OCR engines (Tesseract and similar) are intentionally unsupported.
+OCR is API-only: Gemini / OpenRouter / OpenAI-compatible vision, or Claude CLI.
 
 Env knobs:
-    OCR_BACKEND        auto|vision_api|vision|tesseract (default auto). Auto order:
+    OCR_BACKEND        auto|vision_api|vision (default auto). Auto order:
                        vision_api — OpenAI-compatible vision API key set
                        (OpenRouter / Gemini / OpenAI / DashScope — works with
                        text-only LLM providers like DeepSeek);
-                       vision — Claude CLI available;
-                       tesseract — only when explicitly forced below.
+                       vision — Claude CLI available.
+                       `tesseract` is rejected.
     OCR_VISION_API_BASE   e.g. https://openrouter.ai/api/v1 or
                           https://generativelanguage.googleapis.com/v1beta/openai
     OCR_VISION_API_KEY    API key for the vision provider
@@ -21,7 +24,6 @@ Env knobs:
     OCR_FINAL_MODEL    stronger model for the last attempt (default = OCR_VISION_MODEL)
     OCR_MAX_ATTEMPTS   max attempts across variants (default 3)
     OCR_TIMEOUT        per-attempt timeout seconds (default 180)
-    OCR_TESSERACT      1 forces legacy tesseract backend/cross-check (default off)
     OCR_CLEANUP        1/0 LLM post-correction of OCR text (default 1)
 """
 from __future__ import annotations
@@ -177,16 +179,13 @@ def _vision_api_read(image_path: Path, model: str | None = None,
 def ocr_backend() -> str:
     """Which OCR engine to use. Auto: vision API key → Claude vision → guidance error.
 
-    Local Tesseract is NEVER used unless OCR_BACKEND=tesseract is set explicitly
-    (and OCR_TESSERACT=1). Default path is API-only.
+    Local OCR (Tesseract etc.) is permanently disabled — API-only.
     """
     forced = os.getenv("OCR_BACKEND", "auto").strip().lower()
     if forced == "tesseract":
-        if not _tesseract_forced():
-            raise RuntimeError(
-                "OCR_BACKEND=tesseract отклонён: локальный OCR запрещён. "
-                "Задай OCR_VISION_API_KEY (Gemini) или Claude CLI.")
-        return "tesseract"
+        raise RuntimeError(
+            "OCR_BACKEND=tesseract отклонён: локальный OCR запрещён. "
+            "Используй OCR_VISION_API_KEY (Gemini/OpenRouter) или Claude CLI.")
     if forced in ("vision_api", "vision"):
         return forced
     if _vision_api_available():
@@ -440,34 +439,6 @@ def _vision_read(image_path: Path, model: str) -> str:
     return _vision_read_inline(image_path, model)
 
 
-def _tesseract_forced() -> bool:
-    return os.getenv("OCR_TESSERACT", "").strip().lower() in ("1", "yes", "true", "on")
-
-
-def _tesseract_available() -> bool:
-    """Legacy engine: opt-in only (OCR_TESSERACT=1)."""
-    if not _tesseract_forced():
-        return False
-    exe = shutil.which("tesseract")
-    if not exe:
-        return False
-    try:
-        langs = subprocess.run([exe, "--list-langs"], capture_output=True,
-                               text=True, timeout=10).stdout
-        return "rus" in langs
-    except Exception:
-        return False
-
-
-def _tesseract_ocr(image_path: Path) -> str:
-    exe = shutil.which("tesseract")
-    result = subprocess.run(
-        [exe, str(image_path), "stdout", "-l", "rus+eng", "--psm", "6"],
-        capture_output=True, text=True, timeout=120,
-    )
-    return result.stdout.strip() if result.returncode == 0 else ""
-
-
 def llm_cleanup_ocr(text: str) -> str:
     """Post-correct OCR garbage with the text LLM. Returns cleaned text or,
     on failure, the original."""
@@ -495,8 +466,8 @@ def ocr_image(image_path: str | Path) -> OCRResult:
 
     Tries the original first, then preprocessed variants until a candidate
     scores well; returns the best-scoring transcription overall.
-    Backend: vision LLM (Claude) or Tesseract (DeepSeek provider) with
-    optional LLM post-correction.
+    Backend: vision API (Gemini/OpenRouter/…) or Claude Vision CLI,
+    with optional LLM post-correction. Never local OCR.
     """
     image_path = Path(image_path)
     img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
@@ -519,26 +490,7 @@ def ocr_image(image_path: str | Path) -> OCRResult:
             log.warning("Preprocessing failed, OCR on original only: %s", exc)
             variants = [Variant("original", image_path)]
 
-        if backend == "tesseract":
-            # Legacy local OCR: every variant is cheap, try all, best score wins
-            for variant in variants:
-                attempts += 1
-                try:
-                    text = _tesseract_ocr(variant.path)
-                except Exception as exc:
-                    log.warning("Tesseract failed on %s: %s", variant.name, exc)
-                    scores[variant.name] = 0.0
-                    continue
-                score = ocr_quality_score(text)
-                scores[variant.name] = score
-                log.info("Tesseract variant=%s score=%.3f chars=%d",
-                         variant.name, score, len(text))
-                if score > best_score:
-                    best_text, best_variant, best_score = text, variant.name, score
-            if best_text:
-                best_text = llm_cleanup_ocr(best_text)
-                best_score = max(best_score, ocr_quality_score(best_text))
-        elif backend == "vision_api":
+        if backend == "vision_api":
             # Vision API: costs money per call — fast model on the original
             # first, quality model on preprocessed variants if needed
             for i, variant in enumerate(variants):
@@ -583,19 +535,6 @@ def ocr_image(image_path: str | Path) -> OCRResult:
                     best_text, best_variant, best_score = text, variant.name, score
                 if best_score >= 0.55:
                     break  # good enough, stop spending tokens
-
-            # Tesseract cross-check on the binarized variant (opt-in / auto)
-            if best_score < 0.55 and _tesseract_available():
-                tess_src = variants[-1].path if len(variants) > 1 else image_path
-                try:
-                    tess_text = _tesseract_ocr(tess_src)
-                    tess_score = ocr_quality_score(tess_text) * 0.8  # discount: no layout reasoning
-                    scores["tesseract"] = round(tess_score, 3)
-                    log.info("Tesseract score=%.3f chars=%d", tess_score, len(tess_text))
-                    if tess_score > best_score:
-                        best_text, best_variant, best_score = tess_text, "tesseract", tess_score
-                except Exception as exc:
-                    log.warning("Tesseract failed: %s", exc)
 
     return OCRResult(
         text=best_text, variant=best_variant, score=best_score,
