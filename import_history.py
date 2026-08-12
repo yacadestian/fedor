@@ -113,11 +113,11 @@ def main() -> int:
             mail_cache = work_dir / ".mail_cache"
 
             def _ingest_mail_att(att: mailscan.MailAttachment) -> None:
-                ref = f"{att.folder} | {att.subject} | {att.msg_date}"
-                if ref in done_refs and att.filename:  # already processed this ref
-                    # still allow content-hash dedup inside process_file
-                    pass
-                if ref in done_refs:
+                import hashlib as _hl
+                digest = _hl.sha256(att.data).hexdigest()
+                # Include content hash: one email can carry several PDFs
+                ref = f"{att.folder} | {att.subject} | {att.msg_date} | {digest[:12]}"
+                if digest in seen or ref in done_refs:
                     log.info("  SKIP mail (done) %s", (att.subject or "")[:60])
                     return
                 rec = ingest.process_file(att.filename, att.data, "mail", ref,
