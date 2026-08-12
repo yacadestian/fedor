@@ -59,18 +59,25 @@ def main() -> int:
         records = ingest.load_manifest(work_dir)
         log.info("Loaded %d records from %s", len(records), work_dir)
     else:
-        # Resume: keep already-processed files from a previous crashed run
+        # Resume: keep successes; re-queue records that failed (rate limits etc.)
         records: list[ingest.IngestRecord] = []
         seen: set[str] = set()
         done_refs: set[str] = set()
         if (work_dir / "manifest.json").exists():
-            records = ingest.load_manifest(work_dir)
-            for r in records:
-                if r.file_hash:
-                    seen.add(r.file_hash)
-                if r.source_ref and r.error != "duplicate":
-                    done_refs.add(r.source_ref)
-            log.info("Resuming: %d records already in manifest", len(records))
+            prev = ingest.load_manifest(work_dir)
+            kept = []
+            for r in prev:
+                # Successful recognition or intentional duplicate → skip next time
+                ok = (not r.error) or r.error == "duplicate"
+                if ok:
+                    kept.append(r)
+                    if r.file_hash and r.error != "duplicate":
+                        seen.add(r.file_hash)
+                    if r.source_ref:
+                        done_refs.add(r.source_ref)
+            records = kept
+            log.info("Resuming: %d ok kept, %d failed will be retried",
+                     len(kept), len(prev) - len(kept))
 
         if args.yadisk_dir:
             log.info("=== Yandex Disk: %s ===", args.yadisk_dir)
@@ -96,6 +103,9 @@ def main() -> int:
                          rec.medical, rec.kind, rec.error or rec.title[:60],
                          rec.text_chars)
                 ingest.save_manifest(records, work_dir)  # crash-safe progress
+                # Soft throttle to stay under Gemini free-tier rate limits
+                import time
+                time.sleep(1.5)
 
         if args.mail:
             log.info("=== Mail scan ===")

@@ -124,30 +124,54 @@ def _image_data_url(image_path: Path) -> str:
     return f"data:{mime};base64," + _b64.b64encode(image_path.read_bytes()).decode()
 
 
-def _vision_api_read(image_path: Path, model: str | None = None) -> str:
+def _vision_api_read(image_path: Path, model: str | None = None,
+                     max_retries: int = 6) -> str:
     """OpenAI-compatible vision API (Gemini / OpenRouter / OpenAI / DashScope).
-    One request, image inline as data URL."""
-    resp = requests.post(
-        f"{VISION_API_BASE}/chat/completions",
-        headers={"Authorization": f"Bearer {VISION_API_KEY}"},
-        json={
-            "model": model or VISION_API_MODEL,
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": _OCR_PROMPT},
-                {"type": "image_url",
-                 "image_url": {"url": _image_data_url(image_path)}},
-            ]}],
-            "temperature": 0.0,
-            "max_tokens": 8192,
-        },
-        timeout=OCR_TIMEOUT,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(f"vision API HTTP {resp.status_code}: {resp.text[:200]}")
-    text = (resp.json()["choices"][0]["message"].get("content") or "").strip()
-    if not text:
-        raise RuntimeError("vision API вернул пустой ответ")
-    return text
+    One request, image inline as data URL. Retries on 429/5xx with backoff."""
+    import time
+    last_err: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.post(
+                f"{VISION_API_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {VISION_API_KEY}"},
+                json={
+                    "model": model or VISION_API_MODEL,
+                    "messages": [{"role": "user", "content": [
+                        {"type": "text", "text": _OCR_PROMPT},
+                        {"type": "image_url",
+                         "image_url": {"url": _image_data_url(image_path)}},
+                    ]}],
+                    "temperature": 0.0,
+                    "max_tokens": 8192,
+                },
+                timeout=OCR_TIMEOUT,
+            )
+            if resp.status_code in (429, 500, 502, 503, 504):
+                wait = min(120, 5 * (2 ** attempt))
+                # Honour Retry-After when present
+                ra = resp.headers.get("Retry-After")
+                if ra and ra.isdigit():
+                    wait = max(wait, int(ra))
+                log.warning("Vision API HTTP %s, retry in %ds (attempt %d/%d)",
+                            resp.status_code, wait, attempt + 1, max_retries + 1)
+                time.sleep(wait)
+                last_err = RuntimeError(
+                    f"vision API HTTP {resp.status_code}: {resp.text[:200]}")
+                continue
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"vision API HTTP {resp.status_code}: {resp.text[:200]}")
+            text = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+            if not text:
+                raise RuntimeError("vision API вернул пустой ответ")
+            return text
+        except requests.RequestException as exc:
+            last_err = exc
+            wait = min(60, 3 * (2 ** attempt))
+            log.warning("Vision API network error: %s; retry in %ds", exc, wait)
+            time.sleep(wait)
+    raise RuntimeError(f"vision API недоступен после {max_retries + 1} попыток: {last_err}")
 
 
 def ocr_backend() -> str:
