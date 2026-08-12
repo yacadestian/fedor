@@ -152,6 +152,13 @@ def _vision_api_read(image_path: Path, model: str | None = None,
                 timeout=OCR_TIMEOUT,
             )
             if resp.status_code in (429, 500, 502, 503, 504):
+                body = resp.text[:400]
+                # Hard daily/plan quota — retrying burns minutes for nothing
+                if resp.status_code == 429 and re.search(
+                        r"exceeded your current quota|quota.*exhausted|RESOURCE_EXHAUSTED",
+                        body, re.I):
+                    raise RuntimeError(
+                        f"vision API quota exhausted: {body[:200]}")
                 wait = min(120, 5 * (2 ** attempt))
                 # Honour Retry-After when present
                 ra = resp.headers.get("Retry-After")
@@ -161,7 +168,7 @@ def _vision_api_read(image_path: Path, model: str | None = None,
                             resp.status_code, wait, attempt + 1, max_retries + 1)
                 time.sleep(wait)
                 last_err = RuntimeError(
-                    f"vision API HTTP {resp.status_code}: {resp.text[:200]}")
+                    f"vision API HTTP {resp.status_code}: {body[:200]}")
                 continue
             if resp.status_code != 200:
                 raise RuntimeError(

@@ -106,6 +106,42 @@ def classify_medical(text: str) -> dict:
     return json.loads(m.group(0))
 
 
+_JUNK_SUFFIXES = {".css", ".js", ".html", ".htm", ".svg", ".ico", ".map", ".woff",
+                  ".woff2", ".ttf", ".zip", ".gz", ".mp3", ".mp4", ".wav"}
+_UI_NAME_RE = re.compile(
+    r"(^|[_-])(media_|section_|icon_|sprite_|thumb)|"
+    r"_thumb\.|@2x\.|@3x\.",
+    re.IGNORECASE,
+)
+
+
+def _is_junk_asset(filename: str, data: bytes) -> str | None:
+    """Skip Telegram/web UI crumbs without spending vision API quota."""
+    suffix = Path(filename).suffix.lower()
+    name = Path(filename).name
+    if suffix in _JUNK_SUFFIXES:
+        return f"skip junk: {suffix}"
+    if suffix in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+        if len(data) < 20_000:  # <20 KB — icons, not lab photos
+            return "skip tiny image"
+        if _UI_NAME_RE.search(name):
+            return "skip ui asset"
+    return None
+
+
+def _docx_to_text(data: bytes) -> str:
+    import io
+    from docx import Document
+    doc = Document(io.BytesIO(data))
+    parts = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n".join(parts)
+
+
 def process_file(filename: str, data: bytes, source: str, source_ref: str,
                  work_dir: Path, seen: set[str]) -> IngestRecord:
     """Full pipeline for one file. Never raises — errors land in the record."""
@@ -116,6 +152,12 @@ def process_file(filename: str, data: bytes, source: str, source_ref: str,
         rec.error = "duplicate"
         return rec
     seen.add(digest)
+
+    junk = _is_junk_asset(filename, data)
+    if junk:
+        rec.error = junk
+        rec.kind = "not_medical"
+        return rec
 
     try:
         suffix = Path(filename).suffix.lower()
@@ -130,6 +172,8 @@ def process_file(filename: str, data: bytes, source: str, source_ref: str,
             tmp_img.write_bytes(data)
             # API-only OCR via Gemini flash-lite (no local Tesseract)
             text = _vision_api_read(tmp_img, VISION_API_MODEL_FAST)
+        elif suffix == ".docx":
+            text = _docx_to_text(data)
         elif suffix == ".txt":
             text = data.decode("utf-8", errors="replace")
         else:
