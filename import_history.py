@@ -59,8 +59,18 @@ def main() -> int:
         records = ingest.load_manifest(work_dir)
         log.info("Loaded %d records from %s", len(records), work_dir)
     else:
+        # Resume: keep already-processed files from a previous crashed run
         records: list[ingest.IngestRecord] = []
         seen: set[str] = set()
+        done_refs: set[str] = set()
+        if (work_dir / "manifest.json").exists():
+            records = ingest.load_manifest(work_dir)
+            for r in records:
+                if r.file_hash:
+                    seen.add(r.file_hash)
+                if r.source_ref and r.error != "duplicate":
+                    done_refs.add(r.source_ref)
+            log.info("Resuming: %d records already in manifest", len(records))
 
         if args.yadisk_dir:
             log.info("=== Yandex Disk: %s ===", args.yadisk_dir)
@@ -68,6 +78,9 @@ def main() -> int:
             log.info("Found %d files", len(files))
             for i, (remote_path, size) in enumerate(files, 1):
                 name = remote_path.rsplit("/", 1)[-1]
+                if remote_path in done_refs:
+                    log.info("[%d/%d] SKIP (done) %s", i, len(files), name)
+                    continue
                 log.info("[%d/%d] %s (%d KB)", i, len(files), name, size // 1024)
                 try:
                     local = yadisk.download(remote_path, work_dir / ".dl" / name)
@@ -78,8 +91,10 @@ def main() -> int:
                     continue
                 rec = ingest.process_file(name, data, "yadisk", remote_path, work_dir, seen)
                 records.append(rec)
-                log.info("  → medical=%s %s %s", rec.medical, rec.kind,
-                         rec.error or rec.title[:60])
+                done_refs.add(remote_path)
+                log.info("  → medical=%s %s %s | text=%d chars",
+                         rec.medical, rec.kind, rec.error or rec.title[:60],
+                         rec.text_chars)
                 ingest.save_manifest(records, work_dir)  # crash-safe progress
 
         if args.mail:

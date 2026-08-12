@@ -152,9 +152,18 @@ def _vision_api_read(image_path: Path, model: str | None = None) -> str:
 
 def ocr_backend() -> str:
     """Which OCR engine to use. Auto: vision API key → Claude vision → guidance error.
-    Tesseract only when explicitly forced (OCR_BACKEND=tesseract / OCR_TESSERACT=1)."""
+
+    Local Tesseract is NEVER used unless OCR_BACKEND=tesseract is set explicitly
+    (and OCR_TESSERACT=1). Default path is API-only.
+    """
     forced = os.getenv("OCR_BACKEND", "auto").strip().lower()
-    if forced in ("vision_api", "vision", "tesseract"):
+    if forced == "tesseract":
+        if not _tesseract_forced():
+            raise RuntimeError(
+                "OCR_BACKEND=tesseract отклонён: локальный OCR запрещён. "
+                "Задай OCR_VISION_API_KEY (Gemini) или Claude CLI.")
+        return "tesseract"
+    if forced in ("vision_api", "vision"):
         return forced
     if _vision_api_available():
         return "vision_api"
@@ -164,11 +173,9 @@ def ocr_backend() -> str:
             return "vision"
     except Exception:
         pass
-    if _tesseract_forced():
-        return "tesseract"
     raise RuntimeError(
-        "Нет доступного OCR-движка. Варианты:\n"
-        "1) OCR_VISION_API_KEY в .env — Gemini (есть бесплатный тир) или OpenRouter;\n"
+        "Нет доступного OCR-движка (API only). Варианты:\n"
+        "1) OCR_VISION_API_KEY в .env — Gemini / OpenRouter;\n"
         "2) Claude CLI — тогда фото читает Claude Vision.")
 
 

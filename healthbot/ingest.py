@@ -153,14 +153,15 @@ def process_file(filename: str, data: bytes, source: str, source_ref: str,
         log.warning("Classify failed %s: %s", filename, exc)
         return rec
 
+    # Always persist recognized text; raw originals only for medical docs
+    (work_dir / "text").mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^\wа-яА-ЯёЁ.-]+", "_", filename)[:120]
+    txt_name = f"{digest[:8]}_{Path(safe).stem}.txt"
+    (work_dir / "text" / txt_name).write_text(text, encoding="utf-8")
+    _save_text_cache(work_dir, digest, text)
     if rec.medical:
         (work_dir / "raw").mkdir(parents=True, exist_ok=True)
-        (work_dir / "text").mkdir(parents=True, exist_ok=True)
-        safe = re.sub(r"[^\wа-яА-ЯёЁ.-]+", "_", filename)[:120]
         (work_dir / "raw" / f"{digest[:8]}_{safe}").write_bytes(data)
-        (work_dir / "text" / f"{digest[:8]}_{Path(safe).stem}.txt").write_text(
-            text, encoding="utf-8")
-        _save_text_cache(work_dir, digest, text)
     return rec
 
 

@@ -198,6 +198,7 @@ class TestTesseractRecovery:
     @pytest.mark.skipif(not _tesseract_ready(), reason="tesseract with rus not installed")
     def test_preprocessing_recovers_text(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OCR_BACKEND", "tesseract")
+        monkeypatch.setenv("OCR_TESSERACT", "1")
         monkeypatch.setenv("OCR_CLEANUP", "0")  # no LLM in offline tests
         src = tmp_path / "photo.jpg"
         cv2.imwrite(str(src), degrade_realistic(render_lab_image()))
@@ -285,8 +286,13 @@ class TestVisionApiClient:
         monkeypatch.delenv("OCR_BACKEND", raising=False)
         monkeypatch.setattr(image_ocr, "VISION_API_KEY", "k")
         assert image_ocr.ocr_backend() == "vision_api"
+        # Tesseract is opt-in only (OCR_BACKEND=tesseract AND OCR_TESSERACT=1)
         monkeypatch.setattr(image_ocr, "VISION_API_KEY", "")
         monkeypatch.setenv("OCR_BACKEND", "tesseract")
+        monkeypatch.delenv("OCR_TESSERACT", raising=False)
+        with pytest.raises(RuntimeError, match="локальный OCR запрещён"):
+            image_ocr.ocr_backend()
+        monkeypatch.setenv("OCR_TESSERACT", "1")
         assert image_ocr.ocr_backend() == "tesseract"
 
     def test_error_body_raises(self, tmp_path, monkeypatch):
