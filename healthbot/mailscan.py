@@ -21,6 +21,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from email.header import decode_header
 
 log = logging.getLogger("health-bot")
