@@ -67,8 +67,9 @@ def main() -> int:
             prev = ingest.load_manifest(work_dir)
             kept = []
             for r in prev:
-                # Successful recognition or intentional duplicate → skip next time
-                ok = (not r.error) or r.error == "duplicate"
+                # Successful recognition, duplicates, or intentional skips → keep
+                err = r.error or ""
+                ok = (not err) or err == "duplicate" or err.startswith("skip ")
                 if ok:
                     kept.append(r)
                     if r.file_hash and r.error != "duplicate":
