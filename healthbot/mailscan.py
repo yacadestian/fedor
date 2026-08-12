@@ -174,18 +174,65 @@ def _message_has_pdf(structure: str) -> list[int]:
     return parts
 
 
-def scan_mail(years: int | None = None, folders: list[str] | None = None,
-              limit: int | None = None,
-              progress=lambda msg: log.info(msg)) -> list[MailAttachment]:
-    """Scan configured mailbox, return PDF attachments (deduped by content)."""
+def _cache_paths(cache_dir: Path, digest: str) -> tuple[Path, Path]:
+    return cache_dir / "pdf" / f"{digest}.pdf", cache_dir / "meta" / f"{digest}.json"
+
+
+def _save_mail_cache(cache_dir: Path, digest: str, att: "MailAttachment") -> None:
+    import json
+    pdf_path, meta_path = _cache_paths(cache_dir, digest)
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    if not pdf_path.exists():
+        pdf_path.write_bytes(att.data)
+    meta_path.write_text(json.dumps({
+        "folder": att.folder, "msg_date": att.msg_date, "subject": att.subject,
+        "sender": att.sender, "filename": att.filename, "sha256": digest,
+        "size": len(att.data),
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def load_mail_cache(cache_dir: Path) -> list[MailAttachment]:
+    """Load previously cached PDF attachments (for crash-safe resume)."""
+    import json
+    meta_dir = cache_dir / "meta"
+    if not meta_dir.is_dir():
+        return []
+    out: list[MailAttachment] = []
+    for meta_path in sorted(meta_dir.glob("*.json")):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            pdf_path = cache_dir / "pdf" / f"{meta['sha256']}.pdf"
+            if not pdf_path.exists():
+                continue
+            out.append(MailAttachment(
+                folder=meta.get("folder", ""), msg_date=meta.get("msg_date", ""),
+                subject=meta.get("subject", ""), sender=meta.get("sender", ""),
+                filename=meta.get("filename") or f"{meta['sha256'][:12]}.pdf",
+                data=pdf_path.read_bytes(),
+            ))
+        except Exception as exc:
+            log.warning("Bad mail cache entry %s: %s", meta_path.name, exc)
+    return out
+
+
+def iter_scan_mail(years: int | None = None, folders: list[str] | None = None,
+                   limit: int | None = None,
+                   cache_dir: Path | None = None,
+                   progress=lambda msg: log.info(msg)):
+    """Yield PDF attachments one-by-one; optionally persist to cache_dir."""
     host, login, password, cfg_years, cfg_folders = _mail_config()
     years = years or cfg_years
     folders = folders or cfg_folders
     since = (datetime.now() - timedelta(days=365 * years)).strftime("%d-%b-%Y")
 
-    attachments: list[MailAttachment] = []
     seen_hashes: set[str] = set()
+    if cache_dir:
+        for att in load_mail_cache(cache_dir):
+            import hashlib
+            seen_hashes.add(hashlib.sha256(att.data).hexdigest())
 
+    yielded = 0
     mail = imaplib.IMAP4_SSL(host)
     try:
         mail.login(login, password)
@@ -204,11 +251,9 @@ def scan_mail(years: int | None = None, folders: list[str] | None = None,
             msg_ids = data[0].split()
             log.info("Folder %s: %d messages since %s", folder, len(msg_ids), since)
 
-            # Batch BODYSTRUCTURE fetches: one roundtrip per 200 messages
-            # instead of per message — 100x faster on big mailboxes
             batch = int(os.getenv("MAIL_BATCH", "200"))
             for chunk_start in range(0, len(msg_ids), batch):
-                if limit and len(attachments) >= limit:
+                if limit and yielded >= limit:
                     break
                 chunk = msg_ids[chunk_start:chunk_start + batch]
                 struct_map = _fetch_bodystructures(mail, chunk)
@@ -225,9 +270,8 @@ def scan_mail(years: int | None = None, folders: list[str] | None = None,
                          len(msg_ids), len(candidates))
 
                 for num, pdf_parts in candidates:
-                    if limit and len(attachments) >= limit:
+                    if limit and yielded >= limit:
                         break
-                    # Headers for metadata
                     status, hdata = mail.fetch(
                         num, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
                     header_text = ""
@@ -247,14 +291,12 @@ def scan_mail(years: int | None = None, folders: list[str] | None = None,
                         if status != "OK" or not pdata or not isinstance(pdata[0], tuple):
                             continue
                         raw = pdata[0][1] or b""
-                        # Attachment bodies are base64/qp encoded per Content-Transfer-Encoding
                         import base64
                         try:
                             blob = base64.b64decode(raw, validate=True)
                         except Exception:
                             blob = raw
                         if not blob.startswith(b"%PDF"):
-                            # Some servers return the raw encoded part; try forgiving decode
                             try:
                                 blob = base64.b64decode(raw + b"=" * (-len(raw) % 4))
                             except Exception:
@@ -266,17 +308,28 @@ def scan_mail(years: int | None = None, folders: list[str] | None = None,
                         if digest in seen_hashes:
                             continue
                         seen_hashes.add(digest)
-                        attachments.append(MailAttachment(
+                        att = MailAttachment(
                             folder=decode_mutf7(folder), msg_date=msg_date,
                             subject=subject, sender=sender,
                             filename=f"mail_{num.decode()}_{part_no}.pdf",
                             data=blob,
-                        ))
+                        )
+                        if cache_dir is not None:
+                            _save_mail_cache(cache_dir, digest, att)
                         progress(f"PDF: {subject[:60]} | {msg_date[:20]} | {len(blob)//1024} KB")
+                        yielded += 1
+                        yield att
     finally:
         try:
             mail.logout()
         except Exception:
             pass
 
-    return attachments
+
+def scan_mail(years: int | None = None, folders: list[str] | None = None,
+              limit: int | None = None,
+              cache_dir: Path | None = None,
+              progress=lambda msg: log.info(msg)) -> list[MailAttachment]:
+    """Scan configured mailbox, return PDF attachments (deduped by content)."""
+    return list(iter_scan_mail(years=years, folders=folders, limit=limit,
+                               cache_dir=cache_dir, progress=progress))

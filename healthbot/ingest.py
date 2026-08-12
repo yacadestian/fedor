@@ -192,10 +192,11 @@ def process_file(filename: str, data: bytes, source: str, source_ref: str,
     try:
         verdict = classify_medical(text)
         rec.medical = bool(verdict.get("medical"))
-        rec.kind = verdict.get("kind", "")
-        rec.title = verdict.get("title", "")
+        # LLM may return JSON null — coalesce so logging/slicing never crash
+        rec.kind = verdict.get("kind") or ""
+        rec.title = verdict.get("title") or ""
         rec.doc_date = verdict.get("date") or ""
-        rec.summary = verdict.get("summary", "")
+        rec.summary = verdict.get("summary") or ""
     except Exception as exc:
         rec.error = f"classify: {exc}"
         log.warning("Classify failed %s: %s", filename, exc)

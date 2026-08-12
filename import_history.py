@@ -100,9 +100,9 @@ def main() -> int:
                 rec = ingest.process_file(name, data, "yadisk", remote_path, work_dir, seen)
                 records.append(rec)
                 done_refs.add(remote_path)
+                label = rec.error or (rec.title or "")[:60]
                 log.info("  → medical=%s %s %s | text=%d chars",
-                         rec.medical, rec.kind, rec.error or rec.title[:60],
-                         rec.text_chars)
+                         rec.medical, rec.kind, label, rec.text_chars)
                 ingest.save_manifest(records, work_dir)  # crash-safe progress
                 # Soft throttle to stay under Gemini free-tier rate limits
                 import time
@@ -110,19 +110,41 @@ def main() -> int:
 
         if args.mail:
             log.info("=== Mail scan ===")
-            try:
-                attachments = mailscan.scan_mail(limit=args.mail_limit)
-            except Exception as exc:
-                log.error("Mail scan failed: %s", exc)
-                attachments = []
-            for att in attachments:
+            mail_cache = work_dir / ".mail_cache"
+
+            def _ingest_mail_att(att: mailscan.MailAttachment) -> None:
                 ref = f"{att.folder} | {att.subject} | {att.msg_date}"
+                if ref in done_refs and att.filename:  # already processed this ref
+                    # still allow content-hash dedup inside process_file
+                    pass
+                if ref in done_refs:
+                    log.info("  SKIP mail (done) %s", (att.subject or "")[:60])
+                    return
                 rec = ingest.process_file(att.filename, att.data, "mail", ref,
                                           work_dir, seen)
                 records.append(rec)
-                log.info("  → medical=%s %s %s", rec.medical, rec.kind,
-                         rec.error or rec.title[:60])
+                done_refs.add(ref)
+                label = rec.error or (rec.title or "")[:60]
+                log.info("  → medical=%s %s %s", rec.medical, rec.kind, label)
                 ingest.save_manifest(records, work_dir)
+
+            # Resume from on-disk cache first (crash-safe), then live IMAP scan
+            cached = mailscan.load_mail_cache(mail_cache)
+            if cached:
+                log.info("Mail cache: %d attachments, processing pending…", len(cached))
+                for att in cached:
+                    _ingest_mail_att(att)
+            try:
+                n_new = 0
+                for att in mailscan.iter_scan_mail(limit=args.mail_limit,
+                                                   cache_dir=mail_cache):
+                    before = len(records)
+                    _ingest_mail_att(att)
+                    if len(records) > before:
+                        n_new += 1
+                log.info("Mail scan done, newly ingested this run: %d", n_new)
+            except Exception as exc:
+                log.error("Mail scan failed: %s", exc)
 
         manifest = ingest.save_manifest(records, work_dir)
         medical = [r for r in records if r.medical]
