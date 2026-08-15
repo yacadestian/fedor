@@ -119,20 +119,37 @@ def _vision_api_available() -> bool:
     return bool(VISION_API_KEY)
 
 
-def _image_data_url(image_path: Path) -> str:
-    suffix = image_path.suffix.lower().lstrip(".")
-    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
-            "png": "image/png", "webp": "image/webp"}.get(suffix, "image/jpeg")
+def _image_data_url(image_path: Path, max_long_side: int = 1600) -> str:
+    """Encode image as JPEG data URL, downscaling huge photos for API OCR.
+
+    Full multi-megapixel lab/US photos hang or time out on some vision
+    backends; 2k long side is enough for readable OCR of Russian forms.
+    """
     import base64 as _b64
-    return f"data:{mime};base64," + _b64.b64encode(image_path.read_bytes()).decode()
+    img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if img is None:
+        # Fallback: raw bytes (non-image / decode failure)
+        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "png": "image/png", "webp": "image/webp"}.get(
+            image_path.suffix.lower().lstrip("."), "image/jpeg")
+        return f"data:{mime};base64," + _b64.b64encode(
+            image_path.read_bytes()).decode()
+    h, w = img.shape[:2]
+    if max(h, w) > max_long_side:
+        img = _resize_to(img, max_long_side, cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 78])
+    if not ok:
+        raise RuntimeError(f"cannot encode image for vision API: {image_path}")
+    return "data:image/jpeg;base64," + _b64.b64encode(buf.tobytes()).decode()
 
 
 def _vision_api_read(image_path: Path, model: str | None = None,
-                     max_retries: int = 6) -> str:
+                     max_retries: int = 3) -> str:
     """OpenAI-compatible vision API (Gemini / OpenRouter / OpenAI / DashScope).
     One request, image inline as data URL. Retries on 429/5xx with backoff."""
     import time
     last_err: Exception | None = None
+    data_url = _image_data_url(image_path)
     for attempt in range(max_retries + 1):
         try:
             resp = requests.post(
@@ -143,12 +160,14 @@ def _vision_api_read(image_path: Path, model: str | None = None,
                     "messages": [{"role": "user", "content": [
                         {"type": "text", "text": _OCR_PROMPT},
                         {"type": "image_url",
-                         "image_url": {"url": _image_data_url(image_path)}},
+                         "image_url": {"url": data_url}},
                     ]}],
                     "temperature": 0.0,
-                    "max_tokens": 8192,
+                    "max_tokens": 4096,
+                    # Qwen flash / reasoning models: skip thinking for OCR speed
+                    "reasoning": {"effort": "none"},
                 },
-                timeout=OCR_TIMEOUT,
+                timeout=(20, min(OCR_TIMEOUT, 120)),
             )
             if resp.status_code in (429, 500, 502, 503, 504):
                 body = resp.text[:400]

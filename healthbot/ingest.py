@@ -171,11 +171,11 @@ def process_file(filename: str, data: bytes, source: str, source_ref: str,
             tmp_pdf.write_bytes(data)
             text = pdf_to_text(tmp_pdf)
         elif suffix in (".jpg", ".jpeg", ".png", ".webp"):
-            from .ocr import _vision_api_read, VISION_API_MODEL_FAST
+            from .ocr import ocr_image
             tmp_img = work_dir / f"{digest[:16]}{suffix}"
             tmp_img.write_bytes(data)
-            # API-only OCR via Gemini flash-lite (no local Tesseract)
-            text = _vision_api_read(tmp_img, VISION_API_MODEL_FAST)
+            # API-only OCR (downscales huge photos inside vision path)
+            text = ocr_image(tmp_img).text
         elif suffix == ".docx":
             text = _docx_to_text(data)
         elif suffix == ".txt":
