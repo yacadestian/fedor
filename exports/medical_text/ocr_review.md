@@ -4,9 +4,18 @@
 
 | date | test | value | unit | flag | conf | source | notes |
 |---|---|---:|---|---|---|---|---|
+| 2022-10-20 | Железо | 33.86 | мкмоль/л | high | medium | mail_7447_2.pdf |  |
+| 2022-10-20 | ЛПНП | 4.32 | ммоль/л | high | medium | mail_7447_2.pdf |  |
+| 2022-10-20 | Холестерин общий | 6.48 | ммоль/л | high | medium | mail_7447_2.pdf |  |
 | 2024-06-16 | Холестерин общий | 6.38 | ммоль/л | high | medium | витамин д.pdf |  |
+| 2024-09-12 | Acinetobacter lwoffii | 10000.0 | КОЕ/мл | normal | low | посев на аэробную флору из носа.jpg | OCR photo source — verify doubtful digits |
+| 2024-09-12 | Staphylococcus epidermidis | 1000.0 | КОЕ/мл | low | low | посев на аэробную флору из носа.jpg | OCR photo source — verify doubtful digits |
+| 2024-09-12 | АМИКАЦИН | 21.0 | мм |  | low | посев на аэробную флору из носа.jpg | OCR photo source — verify doubtful digits |
 | 2024-09-12 | Амоксициллин/клавуланат (зона подавления роста) | 26.0 | мм |  | low | чувствительность к антибиотикам.jpg | OCR photo source — verify doubtful digits |
 | 2024-09-12 | Ампициллин/сульбактам (зона подавления роста) | 23.0 | мм |  | low | чувствительность к антибиотикам.jpg | OCR photo source — verify doubtful digits |
+| 2024-09-12 | ИМИПЕНЕМ | 35.0 | мм |  | low | посев на аэробную флору из носа.jpg | OCR photo source — verify doubtful digits |
+| 2024-09-12 | ЛЕВОФЛОКСАЦИН | 27.0 | мм |  | low | посев на аэробную флору из носа.jpg | OCR photo source — verify doubtful digits |
+| 2024-09-12 | МЕРОПЕНЕМ | 28.0 | мм |  | low | посев на аэробную флору из носа.jpg | OCR photo source — verify doubtful digits |
 | 2024-09-12 | Меропенем (зона подавления роста) | 31.0 | мм |  | low | чувствительность к антибиотикам.jpg | OCR photo source — verify doubtful digits |
 | 2024-09-12 | Цефепим (зона подавления роста) | 34.0 | мм |  | low | чувствительность к антибиотикам.jpg | OCR photo source — verify doubtful digits |
 | 2024-09-12 | Цефотаксим (зона подавления роста) | 32.0 | мм |  | low | чувствительность к антибиотикам.jpg | OCR photo source — verify doubtful digits |
@@ -47,6 +56,7 @@
 | 2024-12-09 | АЛТ | 20.1 | Ед/л | normal | low | IMG_20250403_102539_406.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | АСТ | 20.1 | Ед/л | normal | low | IMG-20241209-WA0008.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | АСТ | 42.0 | Ед/л | normal | low | IMG_20250403_102539_406.jpg | OCR photo source — verify doubtful digits |
+| 2024-12-09 | АЧТВ | 31.4 | сек | normal | low | ачтв, фибриноген, мно.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Альбумин | 48.8 | г/л | normal | low | IMG-20241209-WA0008.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Альбумин | 65.0 | г/л | high | low | IMG_20250403_102539_406.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Альфа-амилаза | 92.0 | Ед/л | normal | low | IMG-20241209-WA0008.jpg | OCR photo source — verify doubtful digits |
@@ -69,6 +79,7 @@
 | 2024-12-09 | Гемоглобин | 29.6 | г/л | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Гемоглобин | 334.0 | пг | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Глюкоза | 4.39 | ммоль/л | normal | low | IMG-20241209-WA0008.jpg | OCR photo source — verify doubtful digits |
+| 2024-12-09 | Д-димер | 74.3 | мг/л | normal | low | ачтв, фибриноген, мно.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Калий | 4.26 | ммоль/л | normal | low | IMG-20241209-WA0008.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Калий | 4.39 | ммоль/л | normal | low | IMG_20250403_102539_406.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Кальций общий | 2.4 | ммоль/л | normal | low | IMG-20241209-WA0008.jpg | OCR photo source — verify doubtful digits |
@@ -81,6 +92,7 @@
 | 2024-12-09 | Лейкоциты | 7.3 | 109/л | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Лимфоциты | 1.23 | 10^9/л | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Лимфоциты | 1.23 | 109/л | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
+| 2024-12-09 | МНО | 1.19 |  | normal | low | ачтв, фибриноген, мно.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Моноциты | 0.59 | 10^9/л | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Моноциты | 0.59 | 109/л | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Мочевина | 3.7 | мкмоль/л | normal | low | IMG-20241209-WA0008.jpg | OCR photo source — verify doubtful digits |
@@ -89,6 +101,7 @@
 | 2024-12-09 | Натрий | 140.2 | ммоль/л | normal | low | IMG_20250403_102539_406.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Нейтрофилы | 5.4 | 10^9/л | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Нейтрофилы | 5.4 | 109/л | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
+| 2024-12-09 | Протромбиновое время | 14.1 | сек | normal | low | ачтв, фибриноген, мно.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Процент базофилов | 0.4 | % | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Процент базофилов | 0.4 | % | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Процент лимфоцитов | 16.8 | % | low | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
@@ -97,6 +110,7 @@
 | 2024-12-09 | Процент моноцитов | 8.1 | % | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Процент нейтрофилов | 73.4 | % | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Процент нейтрофилов | 73.4 | % | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
+| 2024-12-09 | Процент протромбина по Квику | 90.9 | % | normal | low | ачтв, фибриноген, мно.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Процент эозинофилов | 1.3 | % | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Процент эозинофилов | 1.3 | % | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Раковый эмбриональный антиген | 2.35 | нг/мл | normal | low | ттг,т3,т4.jpg | OCR photo source — verify doubtful digits |
@@ -110,87 +124,10 @@
 | 2024-12-09 | Тромбоциты | 9.9 | фл | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Тромбоциты | 16.0 | фл | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
 | 2024-12-09 | Тромбоциты | 231.0 | 109/л | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Тромбоциты | 9.6 | фл | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Тромбоциты | 16.0 | % | low | low | общий.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Хлор | 4.2 | ммоль/л | low | low | IMG_20250403_102539_406.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Щелочная фосфатаза | 70.0 | Ед/л | normal | low | IMG-20241209-WA0008.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Щелочная фосфатаза | 118.0 | Ед/л | normal | low | IMG_20250403_102539_406.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Эозинофилы | 0.1 | 10^9/л | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Эозинофилы | 11.1 | 109/л | high | low | общий.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Эритроциты | 5.15 | 10^12/л | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Эритроциты | 88.3 | фл | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Эритроциты | 13.3 | % | normal | low | IMG-20241209-WA0010.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Эритроциты | 3.15 | 1012/л | low | low | общий.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Эритроциты | 68.3 | фл | low | low | общий.jpg | OCR photo source — verify doubtful digits |
-| 2024-12-09 | Эритроциты | 13.3 | % | normal | low | общий.jpg | OCR photo source — verify doubtful digits |
-| 2025-04-08 | Лейкоциты | 3.18 | 10*9/л | low | medium | 1040192913-Данилов Игорь Юрьевич (2).pdf |  |
 
 ## Manifest anomalies
 
-- ERROR `гентамицин.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `посев на аэробную флору из носа.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `ачтв, фибриноген, мно.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `Магнитно-резонансная томография головного мозга.pdf`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `узи 2.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `узи брюшной полости.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `узи кишечника.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `узи лимфотических узлов 25.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `узи мочевого 25.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `узи мошонки 25.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `узи почек 2025.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `узи предстательной железы 25.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `узи щитовидной 25.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `диагностика целиакии.pdf`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `гастроэнтерорлог.jpg`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
-- ERROR `Заключение Данилов И.Ю..pdf`: extract: vision API quota exhausted: [{
-  "error": {
-    "code": 429,
-    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, h
+- ERROR `mail_10256_4.pdf`: no text
 
 ## Extraction issues
 
@@ -199,9 +136,11 @@
 - мазок из ротоглотки.jpg: Row 2 (Klebsiella pneumoniae): invalid value 'None', skipped
 - igG.pdf: Date not found in PDF, using today
 - аллергены.pdf: extract failed: Failed to extract biomarkers from PDF text
-
-## Manual source verification (this pass)
-- HDL 4.6 / 4.22 → non-HDL по тексту источника.
-- B12 256 на 2025-04-18 = активный B12 (холотранскобаламин) >256 пмоль/л.
-- Липиды 2025-04-18/2025-07-17, медь/церулоплазмин/цинк сверены с text/.
-- 16 OCR failures (Gemini quota).
+- диагностика целиакии.pdf: Date not found in PDF, using today
+- mail_5617_2.pdf: Row 0 (Реакция на скрытую кровь): invalid value 'None', skipped
+- mail_9645_2.pdf: Date not found in PDF, using today
+- mail_319_2.pdf: Date not found in PDF, using today
+- mail_7222_2.pdf: Row 0 (Билирубин общий): invalid value 'None', skipped
+- mail_7222_2.pdf: Row 1 (Билирубин прямой): invalid value 'None', skipped
+- mail_7222_2.pdf: Row 2 (Билирубин непрямой): invalid value 'None', skipped
+- mail_7286_2.pdf: Row 0 (Церулоплазмин): invalid value 'None', skipped
