@@ -1,8 +1,8 @@
 # Medical results summary
 
 - Documents processed (lab_results medical): **117**
-- Unique biomarker rows (after dedupe): **658**
-- Unique tests: **279**
+- Unique biomarker rows (after dedupe): **659**
+- Unique tests: **280**
 - Date range: **2022-09-17** → **2026-07-22**
 
 ## Priority panel (latest)

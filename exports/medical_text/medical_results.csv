@@ -329,6 +329,7 @@ date,test_name,value,unit,reference_low,reference_high,flag,laboratory,source_fi
 2024-12-09,Эритроциты,13.3,%,11.0,16.0,normal,unknown,общий.jpg,low,OCR photo source — verify doubtful digits
 2025-01-11,"Антитела к тканевой трансглутаминазе, IgA",0.7,Ед/мл,0.0,7.0,normal,unknown,антитела к тканевой трансглутаминазе.pdf,medium,
 2025-01-11,"Антитела к эндомизию, IgA",5.0,,,5.0,normal,unknown,антитела к эндомизию.pdf,medium,
+2025-02-10,Панкреатическая эластаза 1 в кале,500.0,мкг/г,200.0,,normal,Здоровье семьи®,mail_14943_2.pdf,medium,
 2025-02-12,Антитела к HCV суммарные (IgM и IgG),0.17,КП,0.0,0.99,normal,unknown,anti-hcv.pdf,medium,
 2025-02-15,13С-уреазный дыхательный тест (H.pylori),6.6,‰,,4.0,high,unknown,гипатит а.pdf,medium,
 2025-02-15,Антитела к вирусу гепатита А IgM,0.23,КП,,0.8,normal,unknown,гипатит а.pdf,medium,

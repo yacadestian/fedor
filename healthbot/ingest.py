@@ -63,11 +63,15 @@ def pdf_to_text(pdf_path: Path, max_pages_ocr: int = 10) -> str:
     """pdfplumber for text PDFs; scanned pages rendered through the vision API."""
     from .pdf_parser import extract_text
     text, _pages = extract_text(pdf_path)
-    # Tiny embedded text layers (scanner junk) still need vision OCR
-    if len(text.strip()) >= 80:
+    stripped = text.strip()
+    # Tiny / junk embedded layers (scanner noise, CID glyph soup) need vision OCR
+    cid_heavy = stripped.count("(cid:") >= 20 or (
+        len(stripped) > 200 and stripped.count("(cid:") / max(1, len(stripped)) > 0.05
+    )
+    if len(stripped) >= 80 and not cid_heavy:
         return text
     ocr_text = scanned_pdf_to_text(pdf_path, max_pages_ocr)
-    if len(ocr_text.strip()) > len(text.strip()):
+    if len(ocr_text.strip()) > len(stripped):
         return ocr_text
     return text or ocr_text
 

@@ -153,6 +153,7 @@ date,test_name,value,unit,reference_low,reference_high,flag,laboratory,source_fi
 2024-12-09,Хлор,4.2,ммоль/л,9.18,9.34,low,unknown,IMG_20250403_102539_406.jpg,low,OCR photo source — verify doubtful digits
 2025-01-11,"Антитела к тканевой трансглутаминазе, IgA",0.7,Ед/мл,0.0,7.0,normal,unknown,антитела к тканевой трансглутаминазе.pdf,medium,
 2025-01-11,"Антитела к эндомизию, IgA",5.0,,,5.0,normal,unknown,антитела к эндомизию.pdf,medium,
+2025-02-10,Панкреатическая эластаза 1 в кале,500.0,мкг/г,200.0,,normal,Здоровье семьи®,mail_14943_2.pdf,medium,
 2025-02-12,Антитела к HCV суммарные (IgM и IgG),0.17,КП,0.0,0.99,normal,unknown,anti-hcv.pdf,medium,
 2025-02-15,Антитела к вирусу гепатита А IgM,0.23,КП,,0.8,normal,unknown,гипатит а.pdf,medium,
 2025-04-08,Ферритин,201.4,мкг/л,20.0,250.0,normal,ООО «УНИМЕД»,1040192913-Данилов Игорь Юрьевич (2).pdf,medium,
