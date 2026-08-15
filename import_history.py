@@ -104,9 +104,10 @@ def main() -> int:
                 log.info("  → medical=%s %s %s | text=%d chars",
                          rec.medical, rec.kind, label, rec.text_chars)
                 ingest.save_manifest(records, work_dir)  # crash-safe progress
-                # Soft throttle to stay under Gemini free-tier rate limits
+                # Soft throttle; paid RouterAI/OpenAI-compatible backends don't need
+                # the old Gemini free-tier 4s gap — keep a short pause only.
                 import time
-                time.sleep(4.0)
+                time.sleep(0.4)
 
         if args.mail:
             log.info("=== Mail scan ===")

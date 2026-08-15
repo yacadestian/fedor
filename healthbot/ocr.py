@@ -108,12 +108,11 @@ _CLEANUP_PROMPT = """Ниже — результат OCR медицинског�
 
 VISION_API_BASE = os.getenv(
     "OCR_VISION_API_BASE",
-    "https://generativelanguage.googleapis.com/v1beta/openai").rstrip("/")
+    "https://routerai.ru/api/v1").rstrip("/")
 VISION_API_KEY = os.getenv("OCR_VISION_API_KEY", "").strip()
-# Default both to flash-lite: free-tier quota on gemini-2.5-flash is easily
-# exhausted; lite is enough for lab scans / photos. Override via env if needed.
-VISION_API_MODEL = os.getenv("OCR_VISION_API_MODEL", "gemini-2.5-flash-lite")
-VISION_API_MODEL_FAST = os.getenv("OCR_VISION_API_MODEL_FAST", "gemini-2.5-flash-lite")
+# Default: cheap RouterAI vision model good enough for lab scans / photos.
+VISION_API_MODEL = os.getenv("OCR_VISION_API_MODEL", "qwen/qwen3.7-flash")
+VISION_API_MODEL_FAST = os.getenv("OCR_VISION_API_MODEL_FAST", "qwen/qwen3.7-flash")
 
 
 def _vision_api_available() -> bool:
