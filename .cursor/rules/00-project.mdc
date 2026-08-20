@@ -1,0 +1,17 @@
+---
+description: Режим работы агента в репозитории Fedor
+alwaysApply: true
+---
+
+# Fedor — режим работы
+
+Отвечай на русском. Пользователь часто пишет с телефона.
+
+Перед любой правкой прочитай `AGENTS.md`.
+
+- Это личный health-analytics Telegram-бот, не контент-пайплайн и не dating-bot.
+- Меняй только то, что нужно задаче. Не выдумывай фичи.
+- Секреты, `.env`, `data/`, `logs/` и реальные медданные не коммить и не цитируй.
+- `origin` — GitHub `yacadestian/fedor`. GitLab — зеркало `gitlab`. Оба пушить.
+- Локальный Worker: `srv125304-fedor`. Не рестартовать без явной просьбы.
+- Офлайн-проверка: `.venv/bin/python -m pytest tests/test_offline.py tests/test_ingest.py -q`.

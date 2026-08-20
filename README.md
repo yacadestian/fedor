@@ -75,6 +75,16 @@ ClickHouse (11 tables)
   └── All queries filtered by owner_id
 ```
 
+## Разработка с телефона
+
+Локальный Cursor Worker уже запущен на этой машине: `srv125304-fedor`.
+
+Прямая ссылка: https://cursor.com/agents#workerId=20b05eec-fc69-4a88-9533-71b5adef206b
+
+Правила для агента: `AGENTS.md`. Воркер: `docs/worker.md`.
+
+GitHub: `git@github.com:yacadestian/fedor.git` (origin). GitLab-зеркало: `git@gitlab.com:yacadestian/fedor.git`.
+
 ## Requirements
 
 - Python 3.11+
