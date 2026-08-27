@@ -193,17 +193,22 @@ def main() -> int:
                 log.warning("  Disk upload failed: %s", exc)
 
     log.info("=== Mail → Yandex Disk (API OCR only, all time) ===")
-    cached = mailscan.load_mail_cache(mail_cache)
-    if cached:
-        log.info("Mail cache: %d attachments", len(cached))
-        for att in cached:
-            handle(att)
-
+    # Phase 1: cache PDFs quickly while IMAP is alive (no OCR yet)
+    log.info("Phase 1: cache all PDF attachments")
     try:
-        for att in mailscan.iter_scan_mail(years=0, cache_dir=mail_cache):
-            handle(att)
+        n_new = 0
+        for _att in mailscan.iter_scan_mail(years=0, cache_dir=mail_cache):
+            n_new += 1
+        log.info("Phase 1 done, newly cached this run: %d", n_new)
     except Exception as exc:
-        log.error("Mail scan failed: %s", exc)
+        log.error("Mail scan failed (cache continues from disk): %s", exc)
+
+    # Phase 2: OCR via vision API + upload medical originals + .txt sidecars
+    log.info("Phase 2: classify + API OCR + Disk upload")
+    cached = mailscan.load_mail_cache(mail_cache)
+    log.info("Mail cache: %d attachments", len(cached))
+    for att in cached:
+        handle(att)
 
     ingest.save_manifest(records, work_dir)
     log.info("Done scanned=%d medical=%d uploaded=%d skipped=%d failed=%d",

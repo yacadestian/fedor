@@ -237,33 +237,84 @@ def iter_scan_mail(years: int | None = None, folders: list[str] | None = None,
             seen_hashes.add(hashlib.sha256(att.data).hexdigest())
 
     yielded = 0
-    mail = imaplib.IMAP4_SSL(host)
+    mail: imaplib.IMAP4_SSL | None = None
+
+    def _connect() -> imaplib.IMAP4_SSL:
+        m = imaplib.IMAP4_SSL(host)
+        m.login(login, password)
+        return m
+
+    def _safe_logout(m: imaplib.IMAP4_SSL | None) -> None:
+        if m is None:
+            return
+        try:
+            m.logout()
+        except Exception:
+            try:
+                m.shutdown()
+            except Exception:
+                pass
+
     try:
-        mail.login(login, password)
+        mail = _connect()
         all_folders = _list_folders(mail)
         targets = match_folders(all_folders, folders)
         log.info("Mail folders matched: %s (of %s)", targets, all_folders)
 
         for folder in targets:
-            status, _ = mail.select(f'"{folder}"', readonly=True)
-            if status != "OK":
-                log.warning("Cannot select folder %s", folder)
+            retries_folder = 0
+            msg_ids: list[bytes] = []
+            selected = False
+            while retries_folder < 5:
+                try:
+                    status, _ = mail.select(f'"{folder}"', readonly=True)
+                    if status != "OK":
+                        log.warning("Cannot select folder %s", folder)
+                        break
+                    query = f"(SINCE {since})" if since else "ALL"
+                    status, data = mail.search(None, query)
+                    if status != "OK":
+                        break
+                    msg_ids = data[0].split()
+                    log.info("Folder %s: %d messages %s",
+                             folder, len(msg_ids),
+                             f"since {since}" if since else "(all time)")
+                    selected = True
+                    break
+                except Exception as exc:
+                    retries_folder += 1
+                    log.warning("IMAP select/search %s failed (%s), reconnect %d",
+                                folder, exc, retries_folder)
+                    _safe_logout(mail)
+                    import time as _t
+                    _t.sleep(min(30, 3 * retries_folder))
+                    mail = _connect()
+            if not selected or mail is None:
                 continue
-            query = f"(SINCE {since})" if since else "ALL"
-            status, data = mail.search(None, query)
-            if status != "OK":
-                continue
-            msg_ids = data[0].split()
-            log.info("Folder %s: %d messages %s",
-                     folder, len(msg_ids),
-                     f"since {since}" if since else "(all time)")
 
-            batch = int(os.getenv("MAIL_BATCH", "200"))
-            for chunk_start in range(0, len(msg_ids), batch):
+            batch = int(os.getenv("MAIL_BATCH", "50"))
+            chunk_start = 0
+            while chunk_start < len(msg_ids):
                 if limit and yielded >= limit:
                     break
                 chunk = msg_ids[chunk_start:chunk_start + batch]
-                struct_map = _fetch_bodystructures(mail, chunk)
+                try:
+                    struct_map = _fetch_bodystructures(mail, chunk)
+                except Exception as exc:
+                    log.warning("BODYSTRUCTURE chunk %d failed: %s — reconnect",
+                                chunk_start, exc)
+                    _safe_logout(mail)
+                    import time as _t
+                    _t.sleep(2)
+                    mail = _connect()
+                    mail.select(f'"{folder}"', readonly=True)
+                    try:
+                        struct_map = _fetch_bodystructures(mail, chunk)
+                    except Exception as exc2:
+                        log.warning("BODYSTRUCTURE retry failed: %s, skip chunk", exc2)
+                        chunk_start += batch
+                        continue
+
                 candidates = []
                 for num in chunk:
                     struct_text = struct_map.get(num, "")
@@ -279,8 +330,19 @@ def iter_scan_mail(years: int | None = None, folders: list[str] | None = None,
                 for num, pdf_parts in candidates:
                     if limit and yielded >= limit:
                         break
-                    status, hdata = mail.fetch(
-                        num, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
+                    try:
+                        status, hdata = mail.fetch(
+                            num, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
+                    except Exception as exc:
+                        log.warning("IMAP fetch header failed: %s, reconnect", exc)
+                        _safe_logout(mail)
+                        mail = _connect()
+                        mail.select(f'"{folder}"', readonly=True)
+                        try:
+                            status, hdata = mail.fetch(
+                                num, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
+                        except Exception:
+                            continue
                     header_text = ""
                     if status == "OK" and hdata and isinstance(hdata[0], tuple):
                         header_text = hdata[0][1].decode("utf-8", errors="replace")
@@ -294,7 +356,17 @@ def iter_scan_mail(years: int | None = None, folders: list[str] | None = None,
                                 .group(1).strip() if re.search(r"Date:", header_text, re.I) else "")
 
                     for part_no in pdf_parts:
-                        status, pdata = mail.fetch(num, f"(BODY.PEEK[{part_no}])")
+                        try:
+                            status, pdata = mail.fetch(num, f"(BODY.PEEK[{part_no}])")
+                        except Exception as exc:
+                            log.warning("IMAP fetch body failed: %s, reconnect", exc)
+                            _safe_logout(mail)
+                            mail = _connect()
+                            mail.select(f'"{folder}"', readonly=True)
+                            try:
+                                status, pdata = mail.fetch(num, f"(BODY.PEEK[{part_no}])")
+                            except Exception:
+                                continue
                         if status != "OK" or not pdata or not isinstance(pdata[0], tuple):
                             continue
                         raw = pdata[0][1] or b""
@@ -326,11 +398,9 @@ def iter_scan_mail(years: int | None = None, folders: list[str] | None = None,
                         progress(f"PDF: {subject[:60]} | {msg_date[:20]} | {len(blob)//1024} KB")
                         yielded += 1
                         yield att
+                chunk_start += batch
     finally:
-        try:
-            mail.logout()
-        except Exception:
-            pass
+        _safe_logout(mail)
 
 
 def scan_mail(years: int | None = None, folders: list[str] | None = None,
