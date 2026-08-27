@@ -240,9 +240,18 @@ def iter_scan_mail(years: int | None = None, folders: list[str] | None = None,
     mail: imaplib.IMAP4_SSL | None = None
 
     def _connect() -> imaplib.IMAP4_SSL:
-        m = imaplib.IMAP4_SSL(host)
-        m.login(login, password)
-        return m
+        last: Exception | None = None
+        for attempt in range(1, 6):
+            try:
+                m = imaplib.IMAP4_SSL(host)
+                m.login(login, password)
+                return m
+            except Exception as exc:
+                last = exc
+                log.warning("IMAP connect failed (%s), retry %d/5", exc, attempt)
+                import time as _t
+                _t.sleep(min(20, 2 * attempt))
+        raise RuntimeError(f"IMAP недоступен: {last}")
 
     def _safe_logout(m: imaplib.IMAP4_SSL | None) -> None:
         if m is None:
