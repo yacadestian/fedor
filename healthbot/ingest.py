@@ -99,7 +99,7 @@ def scanned_pdf_to_text(pdf_path: Path, max_pages: int = 10) -> str:
                 tmp_path.unlink(missing_ok=True)
             if page_text:
                 texts.append(page_text)
-            time.sleep(2.0)  # stay under Gemini free-tier RPM
+            time.sleep(0.3)  # paid RouterAI — no free-tier RPM gap needed
     return "\n\n".join(texts)
 
 

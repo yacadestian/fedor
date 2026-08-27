@@ -52,6 +52,19 @@ def _mkdirs(remote_dir: str) -> None:
             resp.raise_for_status()
 
 
+def exists(remote_path: str) -> bool:
+    """True if a file or folder already exists on Disk."""
+    auth = _auth()
+    if auth is None:
+        return False
+    resp = requests.request(
+        "PROPFIND", WEBDAV_URL + remote_path, data=b"",
+        headers={"Depth": "0", **auth.get("headers", {})},
+        auth=auth.get("auth"), timeout=_TIMEOUT,
+    )
+    return resp.status_code in (207, 200)
+
+
 def upload(local_path: str | Path, remote_subdir: str = "") -> str | None:
     """Upload a file to YANDEX_DISK_DIR[/remote_subdir]/filename.
 

@@ -56,7 +56,7 @@ def _mail_config() -> tuple[str, str, str, int, list[str]]:
         raise RuntimeError(
             "Почта не настроена. Нужны MAIL_LOGIN + MAIL_PASSWORD (пароль приложения) "
             "в .env; MAIL_HOST определится по домену или задайте явно.")
-    years = int(os.getenv("MAIL_SINCE_YEARS", "5"))
+    years = int(os.getenv("MAIL_SINCE_YEARS", "0"))
     folders = [f.strip() for f in os.getenv("MAIL_FOLDERS", "INBOX,Чеки").split(",") if f.strip()]
     return host, login, password, years, folders
 
@@ -223,9 +223,12 @@ def iter_scan_mail(years: int | None = None, folders: list[str] | None = None,
                    progress=lambda msg: log.info(msg)):
     """Yield PDF attachments one-by-one; optionally persist to cache_dir."""
     host, login, password, cfg_years, cfg_folders = _mail_config()
-    years = years or cfg_years
+    years = cfg_years if years is None else years
     folders = folders or cfg_folders
-    since = (datetime.now() - timedelta(days=365 * years)).strftime("%d-%b-%Y")
+    # years <= 0 → all mail, no SINCE filter
+    since = None
+    if years > 0:
+        since = (datetime.now() - timedelta(days=365 * years)).strftime("%d-%b-%Y")
 
     seen_hashes: set[str] = set()
     if cache_dir:
@@ -246,11 +249,14 @@ def iter_scan_mail(years: int | None = None, folders: list[str] | None = None,
             if status != "OK":
                 log.warning("Cannot select folder %s", folder)
                 continue
-            status, data = mail.search(None, f'(SINCE {since})')
+            query = f"(SINCE {since})" if since else "ALL"
+            status, data = mail.search(None, query)
             if status != "OK":
                 continue
             msg_ids = data[0].split()
-            log.info("Folder %s: %d messages since %s", folder, len(msg_ids), since)
+            log.info("Folder %s: %d messages %s",
+                     folder, len(msg_ids),
+                     f"since {since}" if since else "(all time)")
 
             batch = int(os.getenv("MAIL_BATCH", "200"))
             for chunk_start in range(0, len(msg_ids), batch):
