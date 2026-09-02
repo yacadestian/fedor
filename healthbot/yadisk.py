@@ -89,6 +89,27 @@ def upload(local_path: str | Path, remote_subdir: str = "") -> str | None:
     return remote_path
 
 
+def upload_file(local_path: str | Path, remote_path: str) -> str | None:
+    """Upload to an exact Disk path (e.g. /Анализы./2024/оак.txt)."""
+    if not enabled():
+        return None
+    local_path = Path(local_path)
+    remote_path = "/" + remote_path.lstrip("/")
+    remote_dir = remote_path.rsplit("/", 1)[0] or "/"
+    _mkdirs(remote_dir)
+    auth = _auth()
+    with open(local_path, "rb") as f:
+        resp = requests.put(
+            WEBDAV_URL + remote_path, data=f,
+            timeout=max(_TIMEOUT, local_path.stat().st_size // 100_000),
+            **auth,
+        )
+    resp.raise_for_status()
+    log.info("Yandex Disk: uploaded %s → %s (%d bytes)",
+             local_path.name, remote_path, local_path.stat().st_size)
+    return remote_path
+
+
 def sync_document(local_path: str | Path, txt_mirror: str | Path | None = None,
                   remote_subdir: str = "") -> None:
     """Best-effort sync of a document and its .txt mirror. Never raises."""

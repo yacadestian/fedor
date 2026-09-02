@@ -46,7 +46,7 @@ log = logging.getLogger("health-bot")
 
 VISION_MODEL = os.getenv("OCR_VISION_MODEL", "claude-sonnet-4-6")
 FINAL_MODEL = os.getenv("OCR_FINAL_MODEL", VISION_MODEL)
-MAX_ATTEMPTS = int(os.getenv("OCR_MAX_ATTEMPTS", "3"))
+MAX_ATTEMPTS = int(os.getenv("OCR_MAX_ATTEMPTS", "4"))
 OCR_TIMEOUT = int(os.getenv("OCR_TIMEOUT", "180"))
 
 # Quality assessment thresholds (calibrated on synthetic lab-report images)
@@ -54,21 +54,26 @@ _BLUR_THRESHOLD = 40.0        # Laplacian var (after 3x3 denoise) below this = b
 _DARK_THRESHOLD = 115.0       # document photos should be bright (white paper)
 _BRIGHT_MEAN = 235.0          # overexposed only if bright AND washed-out ...
 _BRIGHT_MAX_STD = 15.0        # ... i.e. contrast nearly gone
-_MIN_LONG_SIDE = 1600         # upscale if long side is smaller
+_MIN_LONG_SIDE = 1600         # flag "low res" / upscale variants below this
 _MAX_LONG_SIDE = 3000         # downscale huge photos for OCR speed
+_OCR_LONG_SIDE = int(os.getenv("OCR_LONG_SIDE", "2000"))
+_JPEG_QUALITY = int(os.getenv("OCR_JPEG_QUALITY", "90"))
 
 _OCR_PROMPT = """Это фото медицинского документа (анализы, заключение, назначение).
-Фото может быть низкого качества: размытое, тёмное, под углом, с бликами.
+Фото может быть низкого качества: размытое, тёмное, мелкое, с бликами, снято под углом
+или повёрнуто на 90/180°.
 
-ЗАДАЧА: извлеки весь видимый текст максимально точно.
+ЗАДАЧА: извлеки весь видимый текст максимально точно, как на нормально ориентированном бланке.
 
 ПРАВИЛА:
 1. Переписывай текст КАК ЕСТЬ, построчно, сохраняя структуру таблицы: показатель — значение — единицы — норма
-2. НЕ ПРИДУМЫВАЙ значения. Если символ или число не читается — ставь знак ?
-3. Если строка частично читается — перепиши читаемое, нечитаемое замени на ?
-4. Числа критичны: перепроверь каждое. Десятичный разделитель — как в документе (точка или запятая)
-5. Никаких комментариев, интерпретаций и пояснений — только извлечённый текст
-6. Если это не медицинский документ — всё равно перепиши видимый текст"""
+2. Если бланк повёрнут — всё равно читай строки таблицы в естественном порядке (не сверху вниз по пикселям кадра)
+3. НЕ ПРИДУМЫВАЙ значения и НЕ подставляй «типовую» панель анализов. Если строка или число не читается — ставь ?
+4. Если строка частично читается — перепиши читаемое, нечитаемое замени на ?
+5. Числа критичны: перепроверь каждое. Десятичный разделитель — как в документе (точка или запятая)
+6. Никаких комментариев, интерпретаций и пояснений — только извлечённый текст
+7. Пиши кириллицей, как на бланке. Не транслитерируй русский текст латиницей
+8. Если это не медицинский документ — всё равно перепиши видимый текст"""
 
 _UNITS_RE = re.compile(
     r"(?:г/л|г/дл|мг/л|мг/дл|ммоль/л|мкмоль/л|нмоль/л|пмоль/л|мкг/л|нг/мл|пг/мл|"
@@ -127,25 +132,39 @@ def _vision_api_available() -> bool:
     return bool(VISION_API_KEY)
 
 
-def _image_data_url(image_path: Path, max_long_side: int = 1600) -> str:
-    """Encode image as JPEG data URL, downscaling huge photos for API OCR.
+def load_image_bgr(path: str | Path) -> np.ndarray:
+    """Load a photo honouring EXIF orientation (OpenCV often ignores it)."""
+    path = Path(path)
+    try:
+        from PIL import Image, ImageOps
+        im = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+        return cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
+    except Exception:
+        img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError(f"Cannot decode image: {path}")
+        return img
 
-    Full multi-megapixel lab/US photos hang or time out on some vision
-    backends; 2k long side is enough for readable OCR of Russian forms.
-    """
+
+def _image_data_url(image_path: Path, max_long_side: int | None = None) -> str:
+    """Encode image as JPEG data URL. Upscale tiny scans; downscale huge photos."""
     import base64 as _b64
-    img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if img is None:
-        # Fallback: raw bytes (non-image / decode failure)
+    max_long_side = max_long_side or _OCR_LONG_SIDE
+    try:
+        img = load_image_bgr(image_path)
+    except ValueError:
         mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "png": "image/png", "webp": "image/webp"}.get(
             image_path.suffix.lower().lstrip("."), "image/jpeg")
         return f"data:{mime};base64," + _b64.b64encode(
             image_path.read_bytes()).decode()
     h, w = img.shape[:2]
-    if max(h, w) > max_long_side:
+    long_side = max(h, w)
+    if long_side > max_long_side:
         img = _resize_to(img, max_long_side, cv2.INTER_AREA)
-    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 78])
+    elif long_side < _OCR_LONG_SIDE:
+        img = _resize_to(img, _OCR_LONG_SIDE, cv2.INTER_LANCZOS4)
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY])
     if not ok:
         raise RuntimeError(f"cannot encode image for vision API: {image_path}")
     return "data:image/jpeg;base64," + _b64.b64encode(buf.tobytes()).decode()
@@ -330,20 +349,205 @@ def _resize_to(img: np.ndarray, long_side: int, interp: int) -> np.ndarray:
     return cv2.resize(img, (round(w * scale), round(h * scale)), interpolation=interp)
 
 
-def _deskew(gray: np.ndarray) -> np.ndarray:
-    """Rotate to correct small skew (0.5°–15°); skip if angle implausible."""
+def _skew_angle(gray: np.ndarray) -> float:
+    """Small in-plane skew in degrees, or 0 if not plausible."""
     bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
     coords = np.column_stack(np.where(bw > 0))
     if len(coords) < 200:
-        return gray
+        return 0.0
     angle = cv2.minAreaRect(coords)[-1]
     angle = -(90 + angle) if angle < -45 else -angle
     if abs(angle) < 0.5 or abs(angle) > 15:
+        return 0.0
+    return float(angle)
+
+
+def _deskew(gray: np.ndarray) -> np.ndarray:
+    """Rotate to correct small skew (0.5°–15°); skip if angle implausible."""
+    angle = _skew_angle(gray)
+    if angle == 0.0:
         return gray
     h, w = gray.shape
     m = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
     return cv2.warpAffine(gray, m, (w, h), flags=cv2.INTER_CUBIC,
                           borderMode=cv2.BORDER_REPLICATE)
+
+
+def _deskew_bgr(img: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    angle = _skew_angle(gray)
+    if angle == 0.0:
+        return img
+    h, w = gray.shape
+    m = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
+    return cv2.warpAffine(img, m, (w, h), flags=cv2.INTER_CUBIC,
+                          borderMode=cv2.BORDER_REPLICATE)
+
+
+def _horizontal_line_var(gray: np.ndarray) -> float:
+    """Higher when ink forms horizontal lines (upright printed page).
+
+    Raw row-variance of the binary catches thin synthetic glyphs; a
+    morphological bonus helps real scans with long table rules.
+    """
+    bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    row = float(bw.mean(axis=1).var())
+    k = max(15, gray.shape[1] // 30)
+    ker = cv2.getStructuringElement(cv2.MORPH_RECT, (k, 1))
+    lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, ker)
+    morph = float(lines.mean(axis=1).var())
+    return row + 0.35 * morph
+
+
+_ROT_CODES = (
+    None,
+    cv2.ROTATE_90_CLOCKWISE,
+    cv2.ROTATE_180,
+    cv2.ROTATE_90_COUNTERCLOCKWISE,
+)
+
+
+def _text_start_frac(gray: np.ndarray) -> float:
+    """Where significant ink begins, 0 = top. Used to break 0° vs 180° ties."""
+    bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    frac = (bw > 0).mean(axis=1)
+    ys = np.where(frac > max(0.02, float(frac.mean()) * 0.5))[0]
+    if len(ys) == 0:
+        return 1.0
+    return float(ys[0] / gray.shape[0])
+
+
+def _start_rank(start: float) -> tuple[int, float]:
+    """Prefer a real top margin (1.5–18%) over edge noise (0) or a huge gap."""
+    if 0.015 <= start <= 0.18:
+        return (0, start)
+    if start < 0.015:
+        return (1, start)
+    return (2, start)
+
+
+def choose_rotation(img: np.ndarray) -> int | None:
+    """cv2.rotate code that makes printed text horizontal, or None if already ok.
+
+    0°/180° and 90°/270° have similar line-variance; we prefer no rotation when
+    scores are close (phone photos are rarely upside-down), then the candidate
+    whose ink starts after a small top margin.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    scored: list[tuple] = []
+    for code in _ROT_CODES:
+        g = gray if code is None else cv2.rotate(gray, code)
+        start = _text_start_frac(g)
+        none_pen = 0 if code is None else 1
+        scored.append((_horizontal_line_var(g), _start_rank(start), none_pen, code))
+    scored.sort(key=lambda t: (-t[0], t[1], t[2]))
+    best_var, _, _, best_code = scored[0]
+    close = [s for s in scored if s[0] >= best_var * 0.97]
+    close.sort(key=lambda t: (t[1], t[2]))
+    best_code = close[0][3]
+    if best_code == cv2.ROTATE_180:
+        zero = next(s for s in scored if s[3] is None)
+        if zero[0] >= best_var * 0.92:
+            return None
+    return best_code
+
+
+def _order_quad(pts: np.ndarray) -> np.ndarray:
+    pts = np.asarray(pts, dtype=np.float32).reshape(4, 2)
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1).ravel()
+    tl = pts[np.argmin(s)]
+    br = pts[np.argmax(s)]
+    tr = pts[np.argmin(diff)]
+    bl = pts[np.argmax(diff)]
+    return np.array([tl, tr, br, bl], dtype=np.float32)
+
+
+def find_document_quad(img: np.ndarray) -> np.ndarray | None:
+    """Largest paper-like quadrilateral, or None if the page fills the frame."""
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if th.mean() < 127:
+        th = cv2.bitwise_not(th)
+    k = max(9, min(h, w) // 40)
+    th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
+    c = max(cnts, key=cv2.contourArea)
+    frac = cv2.contourArea(c) / float(h * w)
+    if frac < 0.35:
+        return None
+    peri = cv2.arcLength(c, True)
+    approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+    if len(approx) == 4:
+        quad = approx.reshape(4, 2).astype(np.float32)
+    else:
+        quad = cv2.boxPoints(cv2.minAreaRect(c)).astype(np.float32)
+    # Skip near-full-frame axis-aligned boxes — warp would be a no-op/crop
+    xs, ys = quad[:, 0], quad[:, 1]
+    inset = min(float(xs.min()), float(ys.min()), float(w - xs.max()), float(h - ys.max()))
+    if inset < 0.04 * min(h, w):
+        return None
+    if frac > 0.95:
+        return None
+    return quad
+
+
+def warp_document(img: np.ndarray, quad: np.ndarray) -> np.ndarray:
+    pts = _order_quad(quad)
+    tl, tr, br, bl = pts
+    width = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
+    height = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
+    width = max(width, 32)
+    height = max(height, 32)
+    dst = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+                   dtype=np.float32)
+    matrix = cv2.getPerspectiveTransform(pts, dst)
+    return cv2.warpPerspective(img, matrix, (width, height))
+
+
+def _enhance_bgr(img: np.ndarray, *, mild: bool = False) -> np.ndarray:
+    """CLAHE on L; unsharp only on larger photos (tiny JPEGs moiré if sharpened)."""
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+    clip = 2.0 if mild else 3.0
+    clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8))
+    l_ch = clahe.apply(l_ch)
+    if not mild:
+        blur = cv2.GaussianBlur(l_ch, (0, 0), 3)
+        l_ch = cv2.addWeighted(l_ch, 1.5, blur, -0.5, 0)
+    return cv2.cvtColor(cv2.merge([l_ch, a_ch, b_ch]), cv2.COLOR_LAB2BGR)
+
+
+def prepare_for_ocr(img: np.ndarray) -> np.ndarray:
+    """Upright, optionally cropped, contrast-boosted page at OCR_LONG_SIDE."""
+    tiny = min(img.shape[:2]) < 800
+    code = choose_rotation(img)
+    if code is not None:
+        img = cv2.rotate(img, code)
+    quad = find_document_quad(img)
+    if quad is not None:
+        try:
+            warped = warp_document(img, quad)
+            if min(warped.shape[:2]) >= 40:
+                img = warped
+        except Exception as exc:
+            log.info("Document warp skipped: %s", exc)
+    img = _deskew_bgr(img)
+    long_side = max(img.shape[:2])
+    if long_side < _OCR_LONG_SIDE:
+        if tiny:
+            try:
+                img = cv2.fastNlMeansDenoisingColored(img, None, 4, 4, 7, 21)
+            except Exception:
+                pass
+        img = _resize_to(img, _OCR_LONG_SIDE, cv2.INTER_LANCZOS4)
+    elif long_side > _MAX_LONG_SIDE:
+        img = _resize_to(img, _MAX_LONG_SIDE, cv2.INTER_AREA)
+    return _enhance_bgr(img, mild=tiny)
 
 
 def _enhanced(gray: np.ndarray) -> np.ndarray:
@@ -368,21 +572,19 @@ def _binarized(enhanced_gray: np.ndarray) -> np.ndarray:
 
 
 def build_variants(image_path: Path, work_dir: Path, quality: QualityInfo) -> list[Variant]:
-    """Produce OCR candidates. Original always first; enhanced variants added
-    when quality is poor (or always, cheap insurance — attempts are capped)."""
-    img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError(f"Cannot decode image: {image_path}")
+    """OCR candidates: prepared upright page first, then 180° and binary."""
+    img = load_image_bgr(image_path)
+    prepared = prepare_for_ocr(img)
+    prep_path = work_dir / f"{image_path.stem}_prepared.jpg"
+    cv2.imwrite(str(prep_path), prepared, [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY])
+    variants = [Variant("prepared", prep_path)]
 
-    variants = [Variant("original", image_path)]
+    rot180 = cv2.rotate(prepared, cv2.ROTATE_180)
+    rot_path = work_dir / f"{image_path.stem}_prepared180.jpg"
+    cv2.imwrite(str(rot_path), rot180, [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY])
+    variants.append(Variant("prepared_180", rot_path))
 
-    # Normalize resolution for preprocessing variants
-    if max(img.shape[:2]) > _MAX_LONG_SIDE:
-        img = _resize_to(img, _MAX_LONG_SIDE, cv2.INTER_AREA)
-    if max(img.shape[:2]) < _MIN_LONG_SIDE:
-        img = _resize_to(img, _MIN_LONG_SIDE, cv2.INTER_CUBIC)
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(prepared, cv2.COLOR_BGR2GRAY)
     enh = _enhanced(gray)
     enh_path = work_dir / f"{image_path.stem}_enhanced.png"
     cv2.imwrite(str(enh_path), enh)
@@ -423,7 +625,13 @@ def ocr_quality_score(text: str) -> float:
         score *= 0.5
     elif q_density > 0.02:
         score *= 0.8
-    return round(score, 3)
+    # Transliterated Cyrillic (latin letters dominating) usually means the
+    # model failed to read a Russian form and invented a panel.
+    cyr = sum(1 for c in t.lower() if "а" <= c <= "я" or c == "ё")
+    lat = sum(1 for c in t.lower() if "a" <= c <= "z")
+    if cyr + lat >= 80 and lat > cyr * 1.2:
+        score *= 0.45
+    return round(min(score, 1.0), 3)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -506,9 +714,7 @@ def ocr_image(image_path: str | Path) -> OCRResult:
     with optional LLM post-correction. Never local OCR.
     """
     image_path = Path(image_path)
-    img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError(f"Cannot decode image: {image_path}")
+    img = load_image_bgr(image_path)
     quality = assess_quality(img)
     backend = ocr_backend()
     log.info("Photo quality: blur=%.0f brightness=%.0f long_side=%d issues=%s | backend=%s",
@@ -527,11 +733,13 @@ def ocr_image(image_path: str | Path) -> OCRResult:
             variants = [Variant("original", image_path)]
 
         if backend == "vision_api":
-            # Vision API: costs money per call — fast model on the original
-            # first, quality model on preprocessed variants if needed
+            # Prepared upright/upscaled page first; stop once the transcript
+            # looks like a lab form. 180° is only used if the first pass is weak.
             for i, variant in enumerate(variants):
                 if attempts >= MAX_ATTEMPTS:
                     break
+                if variant.name == "prepared_180" and best_score >= 0.45:
+                    continue
                 model = VISION_API_MODEL_FAST if i == 0 else VISION_API_MODEL
                 attempts += 1
                 try:
@@ -555,6 +763,8 @@ def ocr_image(image_path: str | Path) -> OCRResult:
             for i, variant in enumerate(variants):
                 if attempts >= MAX_ATTEMPTS:
                     break
+                if variant.name == "prepared_180" and best_score >= 0.45:
+                    continue
                 model = FINAL_MODEL if i == len(variants) - 1 and attempts > 0 else VISION_MODEL
                 attempts += 1
                 try:

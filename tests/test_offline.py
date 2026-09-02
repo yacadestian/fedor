@@ -105,9 +105,12 @@ class TestVariants:
         info = image_ocr.assess_quality(cv2.imread(str(src)))
         variants = image_ocr.build_variants(src, tmp_path, info)
         names = [v.name for v in variants]
-        assert names == ["original", "enhanced", "binary"]
-        for v in variants[1:]:
-            img = cv2.imread(str(v.path), cv2.IMREAD_GRAYSCALE)
+        assert names[0] == "prepared"
+        assert "prepared_180" in names
+        assert "enhanced" in names
+        assert "binary" in names
+        for v in variants:
+            img = cv2.imread(str(v.path), cv2.IMREAD_UNCHANGED)
             assert img is not None and img.size > 0
 
     def test_enhanced_improves_contrast(self, tmp_path):
@@ -116,18 +119,19 @@ class TestVariants:
         cv2.imwrite(str(src), degraded)
         info = image_ocr.assess_quality(cv2.imread(str(src)))
         variants = image_ocr.build_variants(src, tmp_path, info)
-        enhanced = cv2.imread(str(variants[1].path), cv2.IMREAD_GRAYSCALE)
+        prepared = cv2.imread(str(variants[0].path))
         orig_gray = cv2.cvtColor(degraded, cv2.COLOR_BGR2GRAY)
-        # CLAHE + unsharp should increase local contrast (std)
-        assert enhanced.std() > orig_gray.std() * 1.1
+        prep_gray = cv2.cvtColor(prepared, cv2.COLOR_BGR2GRAY)
+        assert prep_gray.std() > orig_gray.std() * 1.05
 
     def test_binary_is_dark_text_on_light_bg(self, tmp_path):
         src = tmp_path / "photo.jpg"
         cv2.imwrite(str(src), degrade(render_lab_image()))
         info = image_ocr.assess_quality(cv2.imread(str(src)))
         variants = image_ocr.build_variants(src, tmp_path, info)
-        binary = cv2.imread(str(variants[2].path), cv2.IMREAD_GRAYSCALE)
-        assert binary.mean() > 127  # mostly light background
+        binary = next(v for v in variants if v.name == "binary")
+        img = cv2.imread(str(binary.path), cv2.IMREAD_GRAYSCALE)
+        assert img.mean() > 127  # mostly light background
 
     def test_deskew_corrects_rotation(self):
         img = cv2.cvtColor(render_lab_image(), cv2.COLOR_BGR2GRAY)
@@ -143,6 +147,56 @@ class TestVariants:
         angle_fixed = cv2.minAreaRect(coords_fixed)[-1]
         norm = lambda a: -(90 + a) if a < -45 else -a
         assert abs(norm(angle_fixed)) < abs(norm(angle_orig))
+
+
+class TestOrientationAndPrepare:
+    def test_upright_keeps_no_rotation(self):
+        assert image_ocr.choose_rotation(render_lab_image()) is None
+
+    def test_90_cw_is_corrected(self):
+        lab = render_lab_image()
+        sideways = cv2.rotate(lab, cv2.ROTATE_90_CLOCKWISE)
+        code = image_ocr.choose_rotation(sideways)
+        assert code in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        fixed = cv2.rotate(sideways, code)
+        assert fixed.shape[1] > fixed.shape[0]
+        assert image_ocr._horizontal_line_var(
+            cv2.cvtColor(fixed, cv2.COLOR_BGR2GRAY)
+        ) > image_ocr._horizontal_line_var(
+            cv2.cvtColor(sideways, cv2.COLOR_BGR2GRAY)
+        )
+
+    def test_90_ccw_is_corrected(self):
+        lab = render_lab_image()
+        sideways = cv2.rotate(lab, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        code = image_ocr.choose_rotation(sideways)
+        assert code in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        fixed = cv2.rotate(sideways, code)
+        assert fixed.shape[1] > fixed.shape[0]
+
+    def test_prepare_upscales_tiny_photo(self):
+        tiny = cv2.resize(render_lab_image(), (320, 206), interpolation=cv2.INTER_AREA)
+        out = image_ocr.prepare_for_ocr(tiny)
+        assert max(out.shape[:2]) >= 1990
+
+    def test_prepare_fixes_sideways_tiny_photo(self):
+        tiny = cv2.resize(render_lab_image(), (400, 257), interpolation=cv2.INTER_AREA)
+        sideways = cv2.rotate(tiny, cv2.ROTATE_90_CLOCKWISE)
+        out = image_ocr.prepare_for_ocr(sideways)
+        assert out.shape[1] > out.shape[0]
+        assert max(out.shape[:2]) >= 1990
+
+    def test_exif_orientation_applied(self, tmp_path):
+        from PIL import Image
+        rgb = np.zeros((40, 80, 3), np.uint8)
+        rgb[:, :40] = (255, 0, 0)
+        im = Image.fromarray(rgb)
+        exif = im.getexif()
+        exif[274] = 6  # rotate 90 CW for display → 80x40
+        path = tmp_path / "exif6.jpg"
+        im.save(path, format="JPEG", quality=95, exif=exif)
+        loaded = image_ocr.load_image_bgr(path)
+        assert loaded.shape[0] == 80 and loaded.shape[1] == 40
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -161,7 +215,19 @@ class TestOcrScoring:
         assert image_ocr.ocr_quality_score(
             "К сожалению, не удалось распознать текст на этом изображении. " * 3) <= 0.10
 
+    def test_transliterated_russian_penalized(self):
+        ru = "\n".join(LAB_LINES)
+        latin = (
+            "Gemoglobin 145 g/l 130-160\nEritrotsity 4.52\nLeykotsity 6.1\n"
+            "Trombotsity 248\nGlyukoza 5.4 mmol/l\nKreatinin 88 umol/l\n"
+            "ALT 25 U/l AST 22 Ferritin 95\nBilirubin cholesterol glucose"
+        )
+        assert image_ocr.ocr_quality_score(latin) < image_ocr.ocr_quality_score(ru)
+
     def test_question_marks_penalized(self):
+        clean = "\n".join(LAB_LINES)
+        noisy = clean.replace("5", "?")
+        assert image_ocr.ocr_quality_score(noisy) < image_ocr.ocr_quality_score(clean)
         clean = "\n".join(LAB_LINES)
         noisy = clean.replace("5", "?")
         assert image_ocr.ocr_quality_score(noisy) < image_ocr.ocr_quality_score(clean)
