@@ -1,0 +1,14 @@
+requests>=2.31
+PyYAML>=6.0
+python-dotenv>=1.0
+pdfplumber>=0.11
+clickhouse-connect>=0.7
+matplotlib>=3.8
+reportlab>=4.0
+opencv-python-headless>=4.8
+numpy>=1.26
+Pillow>=10.0
+PyMuPDF>=1.24
+python-docx>=1.1
+# Voice messages (optional, ~250MB + model download; bot works without it):
+# faster-whisper>=1.1
