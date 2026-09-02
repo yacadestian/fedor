@@ -1,0 +1,19 @@
+[Unit]
+Description=Cursor Agent Worker (fedor)
+Documentation=https://cursor.com/docs/cloud-agent/self-hosted-guides/my-machines
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/idanilov/projs/fedor
+Environment=HOME=/home/idanilov
+Environment=PATH=/home/idanilov/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/idanilov/.local/bin/agent worker start --worker-dir /home/idanilov/projs/fedor --name srv125304-fedor
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
