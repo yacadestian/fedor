@@ -52,7 +52,19 @@ PRIORITY = [
     "ТТГ", "Т4 свободный",
 ]
 
+# More specific CBC *indices* first — otherwise "гемоглобин" inside MCHC
+# aliases 334 г/л as hemoglobin, MPV 9.9 фл as platelets, etc.
+INDEX_ALIASES = {
+    r"mchc|сред\.?\s*конц|средн[аяейи].{0,30}концентрац|концентраци[яи].{0,20}гемогл": "MCHC",
+    r"(?<![a-z])mch(?![ac])|сред\.?\s*сод|средн[аяейи].{0,30}(содерж|масс)|содержани[ея].{0,20}гемогл": "MCH",
+    r"(?<![a-z])mcv(?![a-z])|средний объем эритроцит": "MCV",
+    r"(?<![a-z])rdw|анизоцит|анизот\s*эритр": "RDW",
+    r"(?<![a-z])mpv(?![a-z])|средний объем тромбоцит": "MPV",
+    r"(?<![a-z])pdw|ширина распред.*тромбоц": "PDW",
+}
+
 NAME_ALIASES = {
+    **INDEX_ALIASES,
     r"холестерин\s*общ": "Холестерин общий",
     r"общий\s*холестерин": "Холестерин общий",
     r"cholesterol\s*total|total\s*cholesterol": "Холестерин общий",

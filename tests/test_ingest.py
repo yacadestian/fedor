@@ -130,3 +130,39 @@ class TestIngest:
         ingest.save_manifest(recs, tmp_path)
         loaded = ingest.load_manifest(tmp_path)
         assert loaded[0].file_hash == "h1" and loaded[0].medical
+
+    def test_cid_heavy_detects_glyph_soup(self):
+        soup = "(cid:24)" * 30 + " padding"
+        assert ingest._cid_heavy(soup)
+        assert not ingest._cid_heavy("Гемоглобин 145 г/л норма 130-160")
+
+    def test_pdf_to_text_prefers_ocr_over_longer_cid(self, tmp_path, monkeypatch):
+        soup = "(cid:1)" * 80  # long unreadable layer
+        monkeypatch.setattr(
+            "healthbot.pdf_parser.extract_text",
+            lambda p: (soup, 1),
+        )
+        monkeypatch.setattr(
+            "healthbot.ingest.scanned_pdf_to_text",
+            lambda p, max_pages=10: "Группа крови 0 (I)\nРезус-фактор Rh (+)",
+        )
+        pdf = tmp_path / "cid.pdf"
+        pdf.write_bytes(b"%PDF-1.4 fake")
+        text = ingest.pdf_to_text(pdf)
+        assert "Группа крови" in text
+        assert "(cid:" not in text
+
+
+class TestBiomarkerAliases:
+    def test_cbc_indices_not_aliased_to_hb_rbc_plt(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from build_medical_results import normalize_name
+        assert normalize_name("Гемоглобин") == "Гемоглобин"
+        assert normalize_name("Тромбоциты") == "Тромбоциты"
+        assert normalize_name("Эритроциты") == "Эритроциты"
+        assert normalize_name("Сред. конц. гемоглобина в эр") == "MCHC"
+        assert normalize_name("Средняя концентрация гемоглобина в эритроците") == "MCHC"
+        assert normalize_name("Сред. сод. гемоглобина") == "MCH"
+        assert normalize_name("Средняя масса гемоглобина в эритроците") == "MCH"
+        assert normalize_name("Средний объем тромбоцита") == "MPV"
+        assert normalize_name("Коэфф анизот эритр") == "RDW"

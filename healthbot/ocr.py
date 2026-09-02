@@ -115,6 +115,14 @@ VISION_API_MODEL = os.getenv("OCR_VISION_API_MODEL", "qwen/qwen3.7-flash")
 VISION_API_MODEL_FAST = os.getenv("OCR_VISION_API_MODEL_FAST", "qwen/qwen3.7-flash")
 
 
+def _strip_model_noise(text: str) -> str:
+    """Drop leaked chain-of-thought tags some flash models prepend."""
+    t = (text or "").strip()
+    t = re.sub(r"<think>.*?</think>", "", t, flags=re.DOTALL | re.IGNORECASE)
+    t = re.sub(r"</?think>", "", t, flags=re.IGNORECASE)
+    return t.strip()
+
+
 def _vision_api_available() -> bool:
     return bool(VISION_API_KEY)
 
@@ -192,6 +200,7 @@ def _vision_api_read(image_path: Path, model: str | None = None,
                 raise RuntimeError(
                     f"vision API HTTP {resp.status_code}: {resp.text[:200]}")
             text = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+            text = _strip_model_noise(text)
             if not text:
                 raise RuntimeError("vision API вернул пустой ответ")
             return text

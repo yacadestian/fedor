@@ -166,6 +166,10 @@ class TestOcrScoring:
         noisy = clean.replace("5", "?")
         assert image_ocr.ocr_quality_score(noisy) < image_ocr.ocr_quality_score(clean)
 
+    def test_strips_leaked_think_tags(self):
+        assert image_ocr._strip_model_noise("</think>Гемоглобин 145") == "Гемоглобин 145"
+        assert image_ocr._strip_model_noise("<think>reason</think>\nГемоглобин 145") == "Гемоглобин 145"
+
     def test_result_ok_thresholds(self):
         good = image_ocr.OCRResult(
             text="\n".join(LAB_LINES), variant="enhanced", score=0.6,

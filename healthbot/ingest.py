@@ -59,18 +59,26 @@ class IngestRecord:
         return self.doc_date or "9999"
 
 
+def _cid_heavy(text: str) -> bool:
+    """True when the PDF text layer is CID glyph soup, not readable Russian."""
+    stripped = (text or "").strip()
+    n = stripped.count("(cid:")
+    return n >= 20 or (len(stripped) > 200 and n / max(1, len(stripped)) > 0.05)
+
+
 def pdf_to_text(pdf_path: Path, max_pages_ocr: int = 10) -> str:
     """pdfplumber for text PDFs; scanned pages rendered through the vision API."""
     from .pdf_parser import extract_text
     text, _pages = extract_text(pdf_path)
     stripped = text.strip()
     # Tiny / junk embedded layers (scanner noise, CID glyph soup) need vision OCR
-    cid_heavy = stripped.count("(cid:") >= 20 or (
-        len(stripped) > 200 and stripped.count("(cid:") / max(1, len(stripped)) > 0.05
-    )
+    cid_heavy = _cid_heavy(stripped)
     if len(stripped) >= 80 and not cid_heavy:
         return text
     ocr_text = scanned_pdf_to_text(pdf_path, max_pages_ocr)
+    if cid_heavy:
+        # CID soup is often *longer* than a real transcription — length must not win
+        return ocr_text.strip() or text
     if len(ocr_text.strip()) > len(stripped):
         return ocr_text
     return text or ocr_text
