@@ -78,6 +78,8 @@ nohup .venv/bin/python tg_listener.py >> logs/bot.log 2>&1 & disown
 - `--worker-dir` = `/home/idanilov/projs/fedor`. Worker регистрирует репо
   по git remote origin (GitHub `yacadestian/fedor`). Чужой worker-dir
   подключать нельзя.
+- Бот-психолог Couch — отдельный каталог `/home/idanilov/projs/couch`
+  и worker `srv125304-couch`. В этом репозитории его кода нет.
 - Этот worker уже обслуживает живые сессии. Не рестартовать юнит без
   явной просьбы — текущий агент умрёт.
 
