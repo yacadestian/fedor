@@ -9,7 +9,7 @@
 - worker-dir: `/home/idanilov/projs/fedor`
 - Лейбл Cursor: `yacadestian/fedor` (берётся из git `origin`, это GitHub)
 
-Чужой worker (telegram-line, tg-done, dating-bot) для этого репо не использовать.
+Чужой worker (telegram-line, tg-done, dating-bot, couch) для этого репо не использовать.
 
 Юнит уже запущен и держит живые сессии. Рестарт убивает текущих агентов.
 Без явной просьбы `systemctl --user restart` не делать.
@@ -58,3 +58,8 @@ https://cursor.com/agents#workerId=20b05eec-fc69-4a88-9533-71b5adef206b
 
 Worker ходит исходящим HTTPS на `api2.cursor.sh` / `api2direct.cursor.sh`.
 Входящие порты не нужны.
+
+## Couch
+
+Бот-психолог в этом репозитории не лежит. Он в `/home/idanilov/projs/couch`,
+worker `srv125304-couch`, репозиторий GitLab `yacadestian/couch`.

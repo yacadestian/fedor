@@ -25,6 +25,8 @@ Read [AGENTS.md](../../../AGENTS.md) before edits. Worker notes: [worker.md](../
 ## Do not
 
 - Restart `cursor-agent-worker-fedor.service` unless explicitly asked.
+- Edit the psychologist bot. It lives in `/home/idanilov/projs/couch`
+  (worker `srv125304-couch`).
 - Change GitHub `origin` to GitLab.
 - Commit `.env`, `data/`, `logs/`, real labs, tokens.
 - Pull upstream petrovich-health or rewrite knowledge YAML unasked.
